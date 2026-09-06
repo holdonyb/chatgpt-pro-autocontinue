@@ -1,0 +1,8 @@
+node_modules/
+dist/
+playwright-report/
+test-results/
+PROJECT_STATUS.md
+docs/2026-*.md
+AGENTS.md
+*.zip

@@ -1,0 +1,31 @@
+{
+  "name": "chatgpt-pro-autocontinue",
+  "description": "A conservative Chrome extension that continues a user-bound ChatGPT web conversation after verified completion.",
+  "private": true,
+  "version": "0.2.5",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holdonyb/chatgpt-pro-autocontinue.git"
+  },
+  "bugs": {
+    "url": "https://github.com/holdonyb/chatgpt-pro-autocontinue/issues"
+  },
+  "homepage": "https://github.com/holdonyb/chatgpt-pro-autocontinue#readme",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "vitest run tests/e2e",
+    "validate": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "@types/jsdom": "^21.1.6",
+    "esbuild": "^0.24.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

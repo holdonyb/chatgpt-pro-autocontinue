@@ -1,0 +1,20 @@
+:root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { width: 340px; margin: 0; color: #1f2937; background: #fff; }
+main { padding: 16px; }
+h1 { margin: 0 0 8px; font-size: 18px; }
+label { display: block; margin: 10px 0 5px; font-size: 12px; color: #4b5563; }
+textarea, input { box-sizing: border-box; width: 100%; border: 1px solid #d1d5db; border-radius: 7px; padding: 8px; font: inherit; }
+textarea { resize: vertical; }
+.row { display: flex; gap: 8px; }
+.row label { flex: 1; }
+.mode { margin: 6px 0; color: #047857; font-size: 12px; }
+.muted, .footnote { color: #6b7280; font-size: 11px; }
+.status { min-height: 18px; margin: 12px 0 2px; font-weight: 600; }
+.buttons { display: flex; gap: 8px; margin-top: 12px; }
+button { flex: 1; border: 1px solid #d1d5db; border-radius: 7px; background: #f9fafb; padding: 8px; cursor: pointer; }
+button.primary { color: white; background: #2563eb; border-color: #2563eb; }
+button:disabled { cursor: not-allowed; opacity: .5; }
+details { margin-top: 12px; font-size: 11px; }
+summary { cursor: pointer; color: #4b5563; }
+pre { max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: 8px; border-radius: 6px; background: #f3f4f6; font: 10px/1.4 ui-monospace, Consolas, monospace; }
+#copyLogs { width: 100%; }

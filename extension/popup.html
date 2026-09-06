@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ChatGPT Pro 自动续跑</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>自动续跑</h1>
+      <p id="target" class="muted">正在读取当前对话…</p>
+      <p id="mode" class="mode">模式未知</p>
+      <label for="prompt">续研指令</label>
+      <textarea id="prompt" rows="5">好的，继续推进。</textarea>
+      <div class="row">
+        <label>最多发送 <input id="maxSends" type="number" min="1" max="100" value="20" /></label>
+        <label>小时 <input id="hours" type="number" min="0.1" max="24" step="0.1" value="8" /></label>
+      </div>
+      <label>卡住刷新（分钟） <input id="staleRefreshMinutes" type="number" min="2" max="120" step="1" value="15" /></label>
+      <p id="status" class="status">待开始</p>
+      <p id="reason" class="muted"></p>
+      <p id="actionError" role="alert" hidden></p>
+      <div class="buttons">
+        <button id="start" class="primary">开始续跑</button>
+        <button id="pause">暂停</button>
+        <button id="resume">继续</button>
+        <button id="stop">结束</button>
+      </div>
+      <details>
+        <summary>运行日志</summary>
+        <pre id="logs">暂无日志</pre>
+        <button id="copyLogs" type="button">复制日志</button>
+      </details>
+      <p class="footnote">适配器 v0.2.5 · 可以在回答中启动等待；同一标签页刷新后保留发送计数；发送结果不明确时暂停核对。</p>
+    </main>
+    <script src="popup/index.js"></script>
+  </body>
+</html>

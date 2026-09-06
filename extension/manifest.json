@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT Pro 自动续跑",
+  "description": "在用户指定的 ChatGPT 对话中，等待回答完成后按确认条件自动继续。",
+  "version": "0.2.5",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["https://chatgpt.com/*"],
+  "background": { "service_worker": "background/index.js" },
+  "action": { "default_title": "ChatGPT Pro 自动续跑", "default_popup": "popup.html" },
+  "content_scripts": [{
+    "matches": ["https://chatgpt.com/*"],
+    "js": ["content/index.js"],
+    "run_at": "document_idle"
+  }]
+}
