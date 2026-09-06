@@ -102,6 +102,7 @@ export function readSnapshot(documentId: string): PageSnapshot {
   const lastRole = last?.getAttribute('data-message-author-role');
   return {
     conversationKey: conversationKeyFromUrl(), url: location.href, documentId,
+    visibility: document.visibilityState, focused: document.hasFocus(), wasDiscarded: Boolean((document as Document & { wasDiscarded?: boolean }).wasDiscarded),
     completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0}`,
     branchFingerprint, modeFingerprint: model.fingerprint, modeLabel: model.label,
     status: errorSignal ? 'ERROR' : busySignal ? 'BUSY' : model.fingerprint ? 'READY' : 'UNKNOWN',

@@ -18,10 +18,12 @@ export type PauseReason =
   | 'USER_DRAFT'
   | 'USER_INTERVENTION'
   | 'SEND_UNCERTAIN'
+  | 'SEND_NOT_SENT'
   | 'ERROR_ON_PAGE'
   | 'TAB_UNAVAILABLE'
   | 'TAB_FROZEN'
   | 'TAB_DISCARDED'
+  | 'PAGE_RECOVERY_FAILED'
   | 'DEADLINE_REACHED'
   | 'MAX_SENDS_REACHED'
   | 'USER_REQUESTED'
@@ -32,6 +34,9 @@ export type PauseReason =
 export type PageStatus = 'READY' | 'BUSY' | 'UNKNOWN' | 'ERROR';
 
 export interface PageSnapshot {
+  visibility?: string;
+  focused?: boolean;
+  wasDiscarded?: boolean;
   completionDetail?: string;
   conversationKey: string | null;
   url: string;
@@ -79,6 +84,10 @@ export interface TaskRecord {
   staleRefreshMs: number;
   lastProgressAt: number;
   controlledReloadAt: number | null;
+  failedPageChecks?: number;
+  identityWaitSince?: number | null;
+  recoveryTurnId?: string | null;
+  recoveryReloads?: number;
   prompt: string;
   startedAt: number;
   deadlineAt: number;
@@ -104,12 +113,13 @@ export interface PageInfoRequest { type: 'GET_PAGE_INFO'; }
 export interface PageObservationRequest { type: 'PAGE_OBSERVATION'; snapshot: PageSnapshot; source?: string; }
 export type SendExecutionResult =
   | { ok: true; acceptedBy: 'busy' | 'user-turn' | 'composer-cleared'; userMessageId: string | null }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; clicked?: boolean };
 export interface ContentCommand {
   type: 'EXECUTE_SEND';
   runId: string;
   revision: number;
   attemptId: string;
+  expiresAt: number;
   expectedConversationKey: string;
   expectedDocumentId: string;
   expectedParentTurnId: string;

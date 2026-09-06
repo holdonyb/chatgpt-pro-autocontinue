@@ -40,7 +40,7 @@ describe('page adapter safety fixture', () => {
     const snapshot = readSnapshot('d1');
     expect(snapshot.modeFingerprint).toBeNull();
     expect(snapshot.status).toBe('UNKNOWN');
-    const result = await executeSend({ type: 'EXECUTE_SEND', runId: 'r1', revision: 1, attemptId: 'a1', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
+    const result = await executeSend({ type: 'EXECUTE_SEND', expiresAt: Date.now() + 20_000, runId: 'r1', revision: 1, attemptId: 'a1', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
     expect(result.ok).toBe(false);
   });
 
@@ -99,7 +99,7 @@ describe('page adapter safety fixture', () => {
       document.body.append(send);
     }, { once: true });
     const snapshot = readSnapshot('d1');
-    const result = await executeSend({ type: 'EXECUTE_SEND', runId: 'r1', revision: 1, attemptId: 'x1', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
+    const result = await executeSend({ type: 'EXECUTE_SEND', expiresAt: Date.now() + 20_000, runId: 'r1', revision: 1, attemptId: 'x1', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
     expect(result.ok).toBe(true);
     expect(clicked).toBe(1);
   });
@@ -126,7 +126,7 @@ describe('page adapter safety fixture', () => {
       document.body.append(user);
     });
     const snapshot = readSnapshot('d1');
-    const result = await executeSend({ type: 'EXECUTE_SEND', runId: 'r1', revision: 1, attemptId: 'x2', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
+    const result = await executeSend({ type: 'EXECUTE_SEND', expiresAt: Date.now() + 20_000, runId: 'r1', revision: 1, attemptId: 'x2', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
     expect(result, result.ok ? undefined : result.reason).toEqual({ ok: true, acceptedBy: 'user-turn', userMessageId: 'u2' });
     expect(editable.textContent).toBe('继续');
   });
@@ -148,8 +148,8 @@ describe('page adapter safety fixture', () => {
       send.remove();
     });
     const snapshot = readSnapshot('d1');
-    const result = await executeSend({ type: 'EXECUTE_SEND', runId: 'r1', revision: 1, attemptId: 'x3', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
-    expect(result, result.ok ? undefined : result.reason).toEqual({ ok: true, acceptedBy: 'composer-cleared', userMessageId: 'u1' });
+    const result = await executeSend({ type: 'EXECUTE_SEND', expiresAt: Date.now() + 20_000, runId: 'r1', revision: 1, attemptId: 'x3', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
+    expect(result, result.ok ? undefined : result.reason).toEqual({ ok: true, acceptedBy: 'composer-cleared', userMessageId: null });
   });
 
   it('uses the conversation id as a stable branch fallback', () => {

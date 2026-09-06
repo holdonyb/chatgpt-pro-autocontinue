@@ -41,18 +41,22 @@ function sendButton(el: ComposerEditor): HTMLButtonElement | null {
   const buttons = Array.from(scope.querySelectorAll('button'));
   return buttons.find((button) => {
     const label = `${button.getAttribute('data-testid') ?? ''} ${button.getAttribute('aria-label') ?? ''} ${button.getAttribute('title') ?? ''} ${button.textContent ?? ''}`;
-    return !button.disabled && (/send|submit|发送|提交/i.test(label) || Boolean(form && button.type === 'submit'));
+    return !button.disabled && button.getAttribute('aria-disabled') !== 'true' &&
+      !/stop|cancel|voice|dictat|停止|取消|语音|听写/i.test(label) &&
+      /\bsend\b|\bsubmit\b|发送|提交/i.test(label);
   }) as HTMLButtonElement | null;
 }
 
 async function waitFor<T>(read: () => T | null | false, timeoutMs: number): Promise<T | null> {
   const deadline = Date.now() + timeoutMs;
-  do {
+  while (true) {
     const result = read();
     if (result) return result;
+    // A background timer can wake long after its requested delay. Observe the
+    // current DOM once on wakeup before deciding the condition timed out.
+    if (Date.now() >= deadline) return null;
     await new Promise((resolve) => window.setTimeout(resolve, 100));
-  } while (Date.now() < deadline);
-  return null;
+  }
 }
 
 function composerDiagnostic(el: ComposerEditor): string {
@@ -63,29 +67,45 @@ function composerDiagnostic(el: ComposerEditor): string {
   return `编辑器=${el.tagName.toLowerCase()}#${el.id || '-'}[contenteditable=${el.getAttribute('contenteditable') ?? '-'}]，剩余字符=${value(el).trim().length}，按钮=${buttons || '无'}`;
 }
 
-export async function executeSend(command: ContentCommand, current: PageSnapshot): Promise<SendExecutionResult> {
-  if (current.documentId !== command.expectedDocumentId || current.conversationKey !== command.expectedConversationKey) return { ok: false, reason: '页面身份已变化' };
-  if (current.lastAssistantAnswerId !== command.expectedParentTurnId) return { ok: false, reason: '回答父轮次已变化' };
-  if (!current.editorEmpty || current.hasPendingAttachment) return { ok: false, reason: '检测到用户草稿或附件' };
-  if (current.status !== 'READY' || current.busySignal || !current.finalSignal) return { ok: false, reason: '页面尚未达到可发送状态' };
+export async function executeSend(command: ContentCommand, current: PageSnapshot, contextValid: () => boolean = () => true): Promise<SendExecutionResult> {
+  const notSent = (reason: string): SendExecutionResult => ({ ok: false, clicked: false, reason });
+  const valid = () => Number.isFinite(command.expiresAt) && Date.now() < command.expiresAt && contextValid();
+  if (!valid()) return notSent('发送指令已过期或扩展已重新加载，尚未点击发送。');
+  if (current.documentId !== command.expectedDocumentId || current.conversationKey !== command.expectedConversationKey) return notSent('页面身份已变化');
+  if (current.lastAssistantAnswerId !== command.expectedParentTurnId) return notSent('回答父轮次已变化');
+  if (!current.editorEmpty || current.hasPendingAttachment) return notSent('检测到用户草稿或附件');
+  if (current.status !== 'READY' || current.busySignal || !current.finalSignal) return notSent('页面尚未达到可发送状态');
   const el = findComposerEditor();
-  if (!el) return { ok: false, reason: '未找到编辑器' };
+  if (!el) return notSent('未找到编辑器');
   setValue(el, command.prompt);
-  if (value(el).trim() !== command.prompt.trim()) return { ok: false, reason: '无法确认编辑器内容' };
+  if (value(el).trim() !== command.prompt.trim()) return notSent('无法确认编辑器内容');
   // ChatGPT shows a voice button while the editor is empty and creates/enables the
   // send button only after its input handler has processed the new text.
   const button = await waitFor(() => sendButton(el), 2_500);
-  if (!button) return { ok: false, reason: `填写后仍未找到可用发送按钮；${composerDiagnostic(el)}` };
+  if (!button) return notSent(`尚未点击发送：未找到可用发送按钮；${composerDiagnostic(el)}`);
+  // Revalidate after the asynchronous wait; the page may have navigated or
+  // started generating while the timer was suspended.
+  const fresh = readSnapshot(current.documentId);
+  if (fresh.conversationKey !== command.expectedConversationKey || fresh.lastAssistantAnswerId !== command.expectedParentTurnId ||
+      fresh.modeFingerprint !== current.modeFingerprint || fresh.branchFingerprint !== current.branchFingerprint ||
+      fresh.busySignal || fresh.errorSignal || fresh.hasPendingAttachment || !fresh.finalSignal || fresh.status !== 'READY') {
+    return notSent('等待发送按钮期间页面状态变化，尚未点击发送。');
+  }
+  if (!el.isConnected || findComposerEditor() !== el || value(el).trim() !== command.prompt.trim() ||
+      !button.isConnected || sendButton(el) !== button) return notSent('编辑器或发送按钮已变化，尚未点击发送。');
+  if (!valid()) return notSent('等待期间发送指令已过期或扩展已重新加载，尚未点击发送。');
   button.click();
   const accepted = await waitFor(() => {
     const after = readSnapshot(current.documentId);
-    if (after.busySignal) return { acceptedBy: 'busy' as const, userMessageId: after.lastUserTurnId };
+    if (after.conversationKey !== command.expectedConversationKey || after.modeFingerprint !== current.modeFingerprint || after.branchFingerprint !== current.branchFingerprint) return null;
+    const newUserId = after.lastUserTurnId !== current.lastUserTurnId ? after.lastUserTurnId : null;
+    if (after.busySignal) return { acceptedBy: 'busy' as const, userMessageId: newUserId };
     if (after.lastUserTurnId && after.lastUserTurnId !== current.lastUserTurnId) return { acceptedBy: 'user-turn' as const, userMessageId: after.lastUserTurnId };
     const afterEditor = findComposerEditor();
     if (afterEditor && composerValue(afterEditor).trim() === '' && !sendButton(afterEditor)) {
-      return { acceptedBy: 'composer-cleared' as const, userMessageId: after.lastUserTurnId };
+      return { acceptedBy: 'composer-cleared' as const, userMessageId: newUserId };
     }
     return null;
   }, 5_000);
-  return accepted ? { ok: true, ...accepted } : { ok: false, reason: '已点击发送，但页面没有出现新的用户消息、回答状态或编辑器清空' };
+  return accepted ? { ok: true, ...accepted } : { ok: false, clicked: true, reason: '已点击发送，但页面没有出现新的用户消息、回答状态或编辑器清空' };
 }

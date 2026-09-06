@@ -6,7 +6,7 @@
 - [x] unit tests for completion, markers, guards and reducer
 - [x] coordinator routing, refresh and duplicate-send guard tests
 - [ ] MV3 build loads in a clean Chrome profile
-- [ ] worker restart and alarm recovery simulation
+- [x] worker restart, delayed replies, expired commands, bounded disconnect/reload recovery simulation
 
 ## Real web Pro
 
@@ -17,4 +17,4 @@
 - [ ] refresh/worker restart does not resend an uncertain attempt
 - [ ] mode/branch change, error, limit or captcha pauses without retry
 
-Status: typecheck, 45 automated tests, jsdom fixtures, and the MV3 build pass locally. Real-page observations confirmed visible model detection, composer input, and accepted sends, but background-tab and long-running reliability remain unverified.
+Status: v0.2.7 has 70 automated tests using mocked Chrome APIs and jsdom fixtures. Prior real-page observations confirmed visible model detection, composer input, and accepted sends; they do not validate this version's background-tab and long-running reliability. Check the latest local validation result or CI before relying on a build.

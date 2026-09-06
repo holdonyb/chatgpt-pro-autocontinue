@@ -34,3 +34,21 @@ it('clears the previous action error after a successful retry', async () => {
   await vi.advanceTimersByTimeAsync(1_000);
   expect(document.getElementById('actionError')!.hidden).toBe(true);
 });
+it('does not accumulate page queries when a page response never arrives', async () => {
+  const send = vi.mocked(chrome.runtime.sendMessage);
+  send.mockImplementation(async (message: any) => message.type === 'GET_PAGE_INFO' ? new Promise(() => undefined) : { state: null, logs: [] });
+  send.mockClear();
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(send.mock.calls.filter(call => (call[0] as unknown as { type: string }).type === 'GET_PAGE_INFO')).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(send.mock.calls.filter(call => (call[0] as unknown as { type: string }).type === 'GET_PAGE_INFO')).toHaveLength(2);
+});
+it('shows saved run settings instead of unrelated default inputs', async () => {
+  vi.mocked(chrome.runtime.sendMessage).mockImplementation(async (message: any) => message.type === 'GET_STATUS'
+    ? { state: { runId: 'real-run', state: 'PAUSED', pauseReason: 'SEND_UNCERTAIN', conversationKey: 'c1', prompt: 'saved instruction', confirmedSends: 2, maxSends: 30, startedAt: 0, deadlineAt: 7_200_000, staleRefreshMs: 180_000 }, logs: [] }
+    : { snapshot: { modeLabel: 'Pro' } });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect((document.getElementById('maxSends') as HTMLInputElement).value).toBe('30');
+  expect((document.getElementById('hours') as HTMLInputElement).value).toBe('2');
+  expect((document.getElementById('prompt') as HTMLInputElement).disabled).toBe(true);
+});

@@ -6,6 +6,14 @@ import type { PageSnapshot } from '../../src/shared/types';
 const page = (now = 0): PageSnapshot => ({ conversationKey: 'c1', url: 'https://chatgpt.com/c/c1', documentId: 'd1', branchFingerprint: 'b1', modeFingerprint: 'pro', modeLabel: 'Pro', status: 'READY', lastMessageRole: 'assistant', lastUserTurnId: 'u1', lastAssistantAnswerId: 'a1', answerFingerprint: 'a1:3:end', finalSignal: true, busySignal: false, errorSignal: false, editorEmpty: true, hasPendingAttachment: false, observedAt: now });
 
 describe('dispatch guards', () => {
+  it('refreshes the awaited answer when its busy control is gone but completion evidence is missing', () => {
+    const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 1, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, staleRefreshMinutes: 2, now: 0 });
+    task.lastCompletedTurnId = 'u1';
+    expect(shouldRefreshStaleBusy(task, { ...page(), finalSignal: false }, 120_001)).toBe(true);
+    expect(shouldRefreshStaleBusy(task, { ...page(), finalSignal: false, editorEmpty: false }, 120_001)).toBe(false);
+    task.lastCompletedTurnId = 'accepted:receipt-without-user-id';
+    expect(shouldRefreshStaleBusy(task, { ...page(), finalSignal: false }, 120_001)).toBe(true);
+  });
   it('refreshes a stale submitted turn even when the busy button has disappeared', () => {
     const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 1, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, staleRefreshMinutes: 2, now: 0 });
     Object.assign(task, { confirmedSends: 1, lastCompletedTurnId: 'u2', consumedTurnIds: ['a1'] });

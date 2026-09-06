@@ -35,9 +35,25 @@ Use a dedicated test conversation first. Closing Chrome, putting the computer to
 
 ## Privacy
 
-Task metadata and up to 500 bounded diagnostic events stay in extension local storage. The extension does not persist full assistant answers, page HTML, screenshots, attachments, custom prompt text, cookies, or tokens. Read [the privacy boundary](docs/PRIVACY.md) before use.
+Run settings (including your follow-up instruction), task metadata, an answer fingerprint containing a short text suffix, and up to 500 diagnostic events stay in extension local storage. Full assistant answers, page HTML, screenshots, attachments, cookies, and tokens are not persisted. Read [the privacy boundary](docs/PRIVACY.md) before use.
 
 ## Development
+
+### v0.2.7: bounded recovery
+
+- Page requests time out after 5 seconds; consecutive failed checks pause after the third failure and retain the budget. A successful check clears the failure count.
+- Send commands expire before clicking after 20 seconds or at the run deadline, whichever comes first. A missing reply after 25 seconds remains uncertain and is never replayed. These are wall-clock checks when execution resumes, not guarantees that Chrome will run a timer on time.
+- Reload recovery waits up to 2 minutes for identity and allows at most 3 automatic refreshes per awaited user turn. Manual Resume restarts the recovery allowance, preserving send count and the original deadline.
+- Status reads remain available while a page request is pending. Popup polling is coalesced; active settings show the saved run values. Pauses show an `!` badge and retain the first diagnostic.
+- Duplicate starts are rejected while a run is active. A worker restart cannot infer send success from an unrelated new user message. Only an explicitly identified send button is eligible; ordinary submit, stop and voice controls are excluded.
+
+See [recovery details](docs/SEND_RECOVERY.md). Reload the extension in `chrome://extensions`, then refresh the target ChatGPT tab to replace the old content script. Handle any old unresolved send before starting a new run.
+
+### v0.2.6: delayed timer wakeups
+
+Button polling now reads the DOM once after a delayed timer wakeup before declaring a timeout, and revalidates the page before clicking. A confirmed pre-click failure pauses as `SEND_NOT_SENT` without consuming the send budget; inspect and clear any remaining composer text before resuming. A click with an unknown outcome still remains `SEND_UNCERTAIN` and is never automatically retried. Paused tasks no longer have their first diagnostic overwritten by periodic checks.
+
+Older persisted `SEND_UNCERTAIN` attempts do not contain a reliable click-phase result and remain unresolved after upgrading. Inspect the conversation for the follow-up message, end the old run, and handle the remaining draft before starting a new run with the desired remaining budget.
 
 ```powershell
 npm ci

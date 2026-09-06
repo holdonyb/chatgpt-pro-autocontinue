@@ -50,7 +50,9 @@ chrome.runtime.onMessage.addListener((message: { type: string; command?: Content
   }
   if (message.type === 'EXECUTE_SEND' && message.command) {
     const current = snapshot();
-    void executeSend(message.command, current).then((result) => {
+    void executeSend(message.command, current, () => {
+      try { return alive && Boolean(chrome.runtime?.id); } catch { return false; }
+    }).then((result) => {
       try {
         if (!alive || !chrome.runtime?.id) { stopStaleScript(); return; }
         sendResponse(result);

@@ -1,4 +1,5 @@
 import type { PersistedState, TaskRecord } from '../shared/types';
+import { showTaskBadge } from './badge';
 
 const KEY = 'chatgpt-pro-autocontinue/state';
 const empty: PersistedState = { task: null, logs: [] };
@@ -12,6 +13,7 @@ export async function loadState(): Promise<PersistedState> {
 
 export async function saveState(state: PersistedState): Promise<void> {
   await chrome.storage.local.set({ [KEY]: state });
+  showTaskBadge(state.task);
 }
 
 export async function updateState(mutator: (state: PersistedState) => PersistedState): Promise<PersistedState> {
