@@ -34,6 +34,7 @@ export type PauseReason =
 export type PageStatus = 'READY' | 'BUSY' | 'UNKNOWN' | 'ERROR';
 
 export interface PageSnapshot {
+  modeDetail?: string;
   visibility?: string;
   focused?: boolean;
   wasDiscarded?: boolean;

@@ -13,7 +13,7 @@ export function serialized<T>(work: () => Promise<T>): Promise<T> { const result
 function short(value: string | null | undefined): string { return value ? value.slice(0, 12) : '-'; }
 function snapshotDetail(snapshot: PageSnapshot, task: TaskRecord | null, source = 'unknown', now = Date.now()): string {
   const stableMs = task?.stableSince === null || task?.stableSince === undefined ? 0 : Math.max(0, now - task.stableSince);
-  return `source=${source} status=${snapshot.status} final=${snapshot.finalSignal} busy=${snapshot.busySignal} error=${snapshot.errorSignal} editorEmpty=${snapshot.editorEmpty} attachment=${snapshot.hasPendingAttachment} role=${snapshot.lastMessageRole} assistant=${short(snapshot.lastAssistantAnswerId)} user=${short(snapshot.lastUserTurnId)} branch=${short(snapshot.branchFingerprint)} mode=${snapshot.modeFingerprint ?? '-'} stableMs=${stableMs} visibility=${snapshot.visibility ?? '-'} focused=${snapshot.focused ?? '-'} discarded=${snapshot.wasDiscarded ?? '-'} sampleAgeMs=${Math.max(0, now - snapshot.observedAt)}${snapshot.completionDetail ? ` completion=[${snapshot.completionDetail}]` : ''}`;
+  return `source=${source} status=${snapshot.status} final=${snapshot.finalSignal} busy=${snapshot.busySignal} error=${snapshot.errorSignal} editorEmpty=${snapshot.editorEmpty} attachment=${snapshot.hasPendingAttachment} role=${snapshot.lastMessageRole} assistant=${short(snapshot.lastAssistantAnswerId)} user=${short(snapshot.lastUserTurnId)} branch=${short(snapshot.branchFingerprint)} mode=${snapshot.modeFingerprint ?? '-'} stableMs=${stableMs} visibility=${snapshot.visibility ?? '-'} focused=${snapshot.focused ?? '-'} discarded=${snapshot.wasDiscarded ?? '-'} sampleAgeMs=${Math.max(0, now - snapshot.observedAt)}${snapshot.modeDetail ? ` modeEvidence=[${snapshot.modeDetail}]` : ''}${snapshot.completionDetail ? ` completion=[${snapshot.completionDetail}]` : ''}`;
 }
 
 async function observeTab(tabId: number): Promise<PageSnapshot | null> {
@@ -58,7 +58,7 @@ export async function start(tabId: number, request: StartRequest): Promise<{ ok:
 }
 
 export async function control(type: 'PAUSE' | 'RESUME' | 'STOP', pauseReason: PauseReason = 'USER_REQUESTED', detail?: string | null): Promise<TaskRecord | null> {
-  const state = await loadState();
+  let state = await loadState();
   if (!state.task) return null;
   const now = Date.now();
   if (type === 'RESUME' && state.task.pendingAttempt) {
@@ -67,8 +67,17 @@ export async function control(type: 'PAUSE' | 'RESUME' | 'STOP', pauseReason: Pa
   }
   if (type === 'RESUME' && state.task.state !== 'PAUSED') return state.task;
   if (type === 'PAUSE' && ['PAUSED', 'STOPPED', 'FINISHED'].includes(state.task.state)) return state.task;
+  if (type === 'RESUME' && state.task.pauseReason === 'MODE_CHANGED' && state.task.modeFingerprint === 'pro' && now < state.task.deadlineAt) {
+    const page = await observeTab(state.task.boundTabId);
+    if (page?.conversationKey === state.task.conversationKey && page.branchFingerprint === state.task.branchFingerprint &&
+        page.editorEmpty && !page.hasPendingAttachment && !page.errorSignal && page.status !== 'UNKNOWN' &&
+        /^(?:gpt[- ]*)?[1-9]\d*(?:\.\d+)? pro$/.test(page.modeFingerprint ?? '')) {
+      const rebound = { ...state.task, modeFingerprint: page.modeFingerprint!, revision: state.task.revision + 1 };
+      state = addLog({ ...state, task: rebound }, 'LEGACY_MODE_REBOUND', rebound, Date.now(), `source=manual-resume expected=pro observed=${short(page.modeFingerprint)}`);
+    }
+  }
   const event = type === 'PAUSE' ? { type: 'PAUSE' as const, reason: pauseReason, detail, now } : type === 'RESUME' ? { type: 'RESUME' as const, now } : { type: 'STOP' as const, now };
-  const task = reduceTask(state.task, event);
+  const task = reduceTask(state.task!, event);
   await saveState(addLog({ ...state, task }, type, task, now, detail ?? undefined));
   if (type === 'RESUME') {
     await checkAlarm('resume');
@@ -199,8 +208,9 @@ export async function onObservation(message: PageObservationRequest, sender: Obs
       await saveState(addLog({ ...state, task }, 'MAX_SENDS_REACHED', task));
     }
   }
-  else if (task.state !== 'PAUSED' && (guard.reason === 'ERROR_ON_PAGE' || guard.reason === 'MODE_CHANGED' || guard.reason === 'CONVERSATION_CHANGED' || guard.reason === 'BRANCH_CHANGED' || guard.reason === 'USER_DRAFT' || guard.reason === 'TAB_UNAVAILABLE')) {
-    task = reduceTask(task, { type: 'PAUSE', reason: guard.reason, now: Date.now() });
+  else if (task.state !== 'PAUSED' && (guard.reason === 'ERROR_ON_PAGE' || guard.reason === 'MODE_CHANGED' || guard.reason === 'MODE_UNKNOWN' || guard.reason === 'CONVERSATION_CHANGED' || guard.reason === 'BRANCH_CHANGED' || guard.reason === 'USER_DRAFT' || guard.reason === 'TAB_UNAVAILABLE')) {
+    const detail = guard.reason === 'MODE_CHANGED' || guard.reason === 'MODE_UNKNOWN' ? `原模式：${short(task.modeFingerprint)}；当前识别：${message.snapshot.modeFingerprint ? short(message.snapshot.modeFingerprint) : '无法确认'}。请核对模型选择按钮后继续。` : undefined;
+    task = reduceTask(task, { type: 'PAUSE', reason: guard.reason, detail, now: Date.now() });
     await saveState(addLog({ ...state, task }, 'PAUSE_GUARD', task));
   }
   else await saveState(addLog(state, 'GUARD_BLOCKED', task, Date.now(), `reason=${guard.reason}`));

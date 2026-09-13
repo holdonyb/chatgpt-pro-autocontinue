@@ -17,4 +17,4 @@
 - [ ] refresh/worker restart does not resend an uncertain attempt
 - [ ] mode/branch change, error, limit or captcha pauses without retry
 
-Status: v0.2.7 has 70 automated tests using mocked Chrome APIs and jsdom fixtures. Prior real-page observations confirmed visible model detection, composer input, and accepted sends; they do not validate this version's background-tab and long-running reliability. Check the latest local validation result or CI before relying on a build.
+Status: v0.2.8 has 80 automated tests using mocked Chrome APIs and jsdom fixtures. The supplied composer DOM was also checked offline: adjacent version/Pro spans yield `6 pro` and the stop control remains busy. The full supplied HTML is not included in the repository. This does not validate live long-running background reliability. Check the latest local validation result or CI before relying on a build.

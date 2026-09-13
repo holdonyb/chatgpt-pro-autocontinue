@@ -308,6 +308,32 @@ describe('background observation ownership', () => {
 });
 
 describe('bounded recovery', () => {
+  it('rebinds a legacy generic Pro label only on manual Resume with matching conversation and branch', async () => {
+    const state = await loadState();
+    state.task!.state = 'PAUSED';
+    state.task!.pauseReason = 'MODE_CHANGED';
+    await saveState(state);
+    currentPage = snapshot({ modeFingerprint: '6 pro', modeLabel: '6 Pro', busySignal: true, status: 'BUSY', finalSignal: false });
+    await new Promise(resolve => messageListener({ type: 'RESUME' }, {}, resolve));
+    const after = (await loadState()).task!;
+    expect(after.state).toBe('WAITING_ANSWER');
+    expect(after.modeFingerprint).toBe('6 pro');
+    expect(after.confirmedSends).toBe(2);
+    expect(after.deadlineAt).toBe(state.task!.deadlineAt);
+    expect(sends()).toHaveLength(0);
+  });
+  it('does not rebind a specific Pro version to another version on Resume', async () => {
+    const state = await loadState();
+    state.task!.modeFingerprint = '6 pro';
+    state.task!.state = 'PAUSED';
+    state.task!.pauseReason = 'MODE_CHANGED';
+    await saveState(state);
+    currentPage = snapshot({ modeFingerprint: '7 pro' });
+    await new Promise(resolve => messageListener({ type: 'RESUME' }, {}, resolve));
+    expect((await loadState()).task?.pauseReason).toBe('MODE_CHANGED');
+    expect((await loadState()).task?.modeFingerprint).toBe('6 pro');
+    expect(sends()).toHaveLength(0);
+  });
   it('does not dispatch from the old document while a controlled reload is in flight', async () => {
     const state = await loadState();
     state.task!.controlledReloadAt = Date.now();

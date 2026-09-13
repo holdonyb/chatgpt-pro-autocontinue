@@ -4,6 +4,7 @@ import { composerValue, findComposerEditor } from './composer';
 
 const MESSAGE_SELECTORS = '[data-message-author-role], [data-message-id]';
 const MODEL_SELECTORS = [
+  'form[data-type="unified-composer"] [data-composer-transition-slot="trailing"] button[aria-haspopup="menu"]',
   '[data-testid*="model"]', '[data-testid*="Model"]',
   'button[aria-label*="model" i]', 'button[aria-label*="模型"]'
 ];
@@ -30,7 +31,7 @@ function messages(): Element[] { return Array.from(document.querySelectorAll(MES
 
 function isProModeLabel(value: string): boolean {
   const normalized = value.replace(/\s+/g, ' ').trim();
-  return /^(?:pro|(?:gpt[- ]*)?\d+(?:\.\d+)?\s+pro)$/i.test(normalized);
+  return /^(?:pro|(?:gpt[- ]*)?[1-9]\d*(?:\.\d+)?\s*pro)$/i.test(normalized);
 }
 
 function proModeLabel(node: Element): string | null {
@@ -38,36 +39,38 @@ function proModeLabel(node: Element): string | null {
   for (const value of values) {
     const normalized = value.replace(/\s+/g, ' ').trim();
     if (!normalized || normalized.length > 96) continue;
-    if (isProModeLabel(normalized)) return normalized;
-    const match = normalized.match(/(?:gpt[- ]*)?\d+(?:\.\d+)?\s+pro/i);
-    if (match) return match[0];
+    if (isProModeLabel(normalized)) return normalized.replace(/(\d)\s*(pro)$/i, '$1 $2');
+    // Accessible selector descriptions may contain surrounding UI instructions.
+    // Do not extract an arbitrary substring from filenames or answer text.
+    const match = normalized.match(/(?:^|[,;]\s*)(?:current model|当前模型)[:：]?\s*(.+)$/i);
+    if (match && isProModeLabel(match[1])) return match[1].replace(/(\d)\s*(pro)$/i, '$1 $2');
   }
   return null;
 }
 
-function mode(): { label: string | null; fingerprint: string | null } {
-  const candidates = new Set<Element>();
-  for (const selector of MODEL_SELECTORS) {
-    document.querySelectorAll(selector).forEach((node) => candidates.add(node));
+function eligibleModelControl(node: Element): boolean {
+  if (!node.matches('button, [role="button"]') || node.closest(
+    '[data-message-author-role], [data-message-id], article, [data-testid^="conversation-turn"], nav, aside, [role="menu"], [role="menuitem"], [data-testid*="attachment" i], [data-testid*="file" i], [hidden], [aria-hidden="true"]'
+  )) return false;
+  // document.visibilityState is intentionally not used: a background tab is valid.
+  for (let parent: Element | null = node; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
   }
-  // Current ChatGPT can render the composer model control as a compact button such
-  // as "6 Pro" without a model-specific data-testid or aria-label.
-  document.querySelectorAll('button, [role="button"]').forEach((node) => {
-    if (proModeLabel(node)) candidates.add(node);
-  });
-  const editor = findComposerEditor();
-  let composerScope: Element | null = editor;
-  for (let i = 0; i < 6 && composerScope?.parentElement; i += 1) composerScope = composerScope.parentElement;
-  composerScope?.querySelectorAll('button, [role="button"], [aria-label], [title], span').forEach((node) => {
-    if (proModeLabel(node)) candidates.add(node);
-  });
-  for (const node of candidates) {
-    const value = proModeLabel(node);
-    if (!value) continue;
-    // Keep this deliberately strict. A subscription badge or prose mentioning Pro is not evidence.
-    return { label: value, fingerprint: value.toLowerCase().replace(/\s+/g, ' ') };
-  }
-  return { label: null, fingerprint: null };
+  return true;
+}
+
+function mode(): { label: string | null; fingerprint: string | null; detail: string } {
+  const composer = Array.from(document.querySelectorAll(MODEL_SELECTORS[0])).filter(eligibleModelControl);
+  const explicit = composer.length ? composer : Array.from(document.querySelectorAll(MODEL_SELECTORS.slice(1).join(','))).filter(eligibleModelControl);
+  // A real selector whose value is unreadable/non-Pro blocks fallback to a badge.
+  const candidates = explicit.length ? explicit : Array.from(document.querySelectorAll('button, [role="button"]'))
+    .filter(eligibleModelControl).filter(node => proModeLabel(node) !== null);
+  const labels = candidates.map(proModeLabel);
+  const fingerprints = new Set(labels.filter((label): label is string => label !== null).map(label => label.toLowerCase().replace(/\s+/g, ' ')));
+  const detail = `source=${explicit.length ? 'model-control' : 'exact-button'} scope=${composer.length ? 'composer' : 'page-controls'} candidates=${candidates.length} distinct=${fingerprints.size} unreadable=${labels.some(label => label === null)}`;
+  if (labels.some(label => label === null) || fingerprints.size !== 1) return { label: null, fingerprint: null, detail };
+  return { label: labels[0], fingerprint: [...fingerprints][0], detail };
 }
 
 export function readSnapshot(documentId: string): PageSnapshot {
@@ -104,7 +107,7 @@ export function readSnapshot(documentId: string): PageSnapshot {
     conversationKey: conversationKeyFromUrl(), url: location.href, documentId,
     visibility: document.visibilityState, focused: document.hasFocus(), wasDiscarded: Boolean((document as Document & { wasDiscarded?: boolean }).wasDiscarded),
     completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0}`,
-    branchFingerprint, modeFingerprint: model.fingerprint, modeLabel: model.label,
+    branchFingerprint, modeFingerprint: model.fingerprint, modeLabel: model.label, modeDetail: model.detail,
     status: errorSignal ? 'ERROR' : busySignal ? 'BUSY' : model.fingerprint ? 'READY' : 'UNKNOWN',
     lastMessageRole: lastRole === 'user' || lastRole === 'assistant' ? lastRole : 'unknown',
     lastUserTurnId: lastUser ? messageId(lastUser) : null, lastAssistantAnswerId: lastAssistantId,

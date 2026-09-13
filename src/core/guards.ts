@@ -23,8 +23,8 @@ export function canDispatch(task: TaskRecord, snapshot: PageSnapshot, now: numbe
   if (snapshot.conversationKey !== task.conversationKey) return { ok: false, reason: 'CONVERSATION_CHANGED' };
   if (snapshot.documentId !== task.boundDocumentId) return { ok: false, reason: 'TAB_UNAVAILABLE' };
   if (snapshot.branchFingerprint !== task.branchFingerprint) return { ok: false, reason: 'BRANCH_CHANGED' };
-  if (snapshot.modeFingerprint !== task.modeFingerprint) return { ok: false, reason: 'MODE_CHANGED' };
   if (!snapshot.modeFingerprint) return { ok: false, reason: 'MODE_UNKNOWN' };
+  if (snapshot.modeFingerprint !== task.modeFingerprint) return { ok: false, reason: 'MODE_CHANGED' };
   // Right after a confirmed click, ChatGPT can briefly expose the prompt we just
   // inserted before clearing the composer. During this bounded cooldown it is not
   // evidence of a new user draft.

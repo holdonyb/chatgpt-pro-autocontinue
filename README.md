@@ -39,6 +39,12 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.8: model evidence
+
+The composer model selector takes priority. Adjacent version/Pro spans (`6Pro`) now read as `6 Pro`; filenames such as `C065 Proof notes.md` cannot become a model fingerprint. Answer content, account navigation, hidden controls, and conflicting candidates are excluded or treated as unknown. Logs include selection source and candidate counts without copying arbitrary button text.
+
+For a paused legacy run bound to the generic `pro` label, manual Resume can bind the versioned Pro label after checking the same conversation/branch and an empty composer. This preserves counts and the original deadline. Specific version changes remain blocked. Reload the extension and refresh the target page before resuming.
+
 ### v0.2.7: bounded recovery
 
 - Page requests time out after 5 seconds; consecutive failed checks pause after the third failure and retain the budget. A successful check clears the failure count.
