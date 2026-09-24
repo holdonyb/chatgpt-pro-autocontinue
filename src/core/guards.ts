@@ -10,7 +10,7 @@ export function shouldRefreshStaleBusy(task: TaskRecord, snapshot: PageSnapshot,
   return task.state === 'WAITING_ANSWER' && !task.pendingAttempt && !task.controlledReloadAt &&
     snapshot.documentId === task.boundDocumentId && snapshot.conversationKey === task.conversationKey &&
     snapshot.branchFingerprint === task.branchFingerprint && snapshot.modeFingerprint === task.modeFingerprint &&
-    snapshot.status === 'READY' && !snapshot.busySignal && !snapshot.errorSignal && snapshot.editorEmpty && !snapshot.hasPendingAttachment && now < task.deadlineAt &&
+    (snapshot.status === 'READY' || snapshot.status === 'BUSY') && !snapshot.errorSignal && snapshot.editorEmpty && !snapshot.hasPendingAttachment && now < task.deadlineAt &&
     awaitingSubmittedAnswer && now - (task.lastProgressAt ?? now) >= (task.staleRefreshMs ?? 15 * 60_000);
 }
 

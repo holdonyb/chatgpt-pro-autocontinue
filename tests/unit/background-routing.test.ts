@@ -323,7 +323,7 @@ describe('bounded recovery', () => {
     expect((await loadState()).task?.state).toBe('WAITING_ANSWER');
   });
 
-  it('does not reload a still-generating page after an hour', async () => {
+  it('reloads an unchanged busy page after the threshold without sending or changing the budget', async () => {
     const state = await loadState();
     state.task!.lastCompletedTurnId = 'u2';
     await saveState(state);
@@ -332,7 +332,32 @@ describe('bounded recovery', () => {
     currentPage = snapshot({ status: 'BUSY', busySignal: true, finalSignal: false, lastMessageRole: 'user' });
     const { checkAlarm } = await import('../../src/background/coordinator');
     await checkAlarm();
+    expect(chrome.tabs.reload).toHaveBeenCalledTimes(1);
+    expect(sends()).toHaveLength(0);
+    const after = await loadState();
+    expect(after.task?.confirmedSends).toBe(2);
+    expect(after.task?.deadlineAt).toBe(state.task!.deadlineAt);
+    expect(after.logs.find(log => log.event === 'STALE_BUSY_RELOAD')?.detail).toContain('cause=busy-no-progress action=tabs.reload busy=true');
+  });
+
+  it('cancels busy-page recovery when the final probe finds new tool progress', async () => {
+    const state = await loadState();
+    Object.assign(state.task!, { lastCompletedTurnId: 'u2', lastActivityFingerprint: 'tool-step-1', lastBusySignal: true });
+    await saveState(state);
+    chrome.tabs.reload = vi.fn(async () => undefined);
+    vi.setSystemTime(1_000_000);
+    const busy = snapshot({ status: 'BUSY', busySignal: true, finalSignal: false, lastMessageRole: 'user', activityFingerprint: 'tool-step-1' });
+    sendMessage.mockResolvedValueOnce(busy);
+    currentPage = { ...busy, activityFingerprint: 'tool-step-2' };
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    expect(sendMessage.mock.calls.filter(call => call[1]?.type === 'GET_SNAPSHOT')).toHaveLength(2);
     expect(chrome.tabs.reload).not.toHaveBeenCalled();
+    expect((await loadState()).task?.lastProgressAt).toBe(Date.now());
+    expect(sends()).toHaveLength(0);
+    vi.setSystemTime(Date.now() + 901_000);
+    await checkAlarm();
+    expect(chrome.tabs.reload).toHaveBeenCalledTimes(1);
     expect(sends()).toHaveLength(0);
   });
 
@@ -600,13 +625,13 @@ describe('bounded recovery', () => {
     expect(sends()).toHaveLength(0);
   });
 
-  it('bounds automatic refreshes across reloads of the same unanswered user turn', async () => {
+  it.each([true, false])('bounds automatic refreshes of the same unanswered user turn with busy=%s', async busy => {
     const state = await loadState();
     state.task!.lastCompletedTurnId = 'u2';
     await saveState(state);
     chrome.tabs.reload = vi.fn(async () => undefined);
     const { checkAlarm } = await import('../../src/background/coordinator');
-    currentPage = snapshot({ status: 'READY', busySignal: false, finalSignal: false, lastMessageRole: 'user' });
+    currentPage = snapshot({ status: busy ? 'BUSY' : 'READY', busySignal: busy, finalSignal: false, lastMessageRole: 'user' });
     for (let n = 0; n < 4; n++) {
       vi.setSystemTime(Date.now() + 901_000);
       await checkAlarm();

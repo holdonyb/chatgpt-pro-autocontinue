@@ -47,20 +47,23 @@ describe('dispatch guards', () => {
     expect(result).toEqual({ ok: false, reason: 'COMPLETION_UNKNOWN' });
   });
 
-  it('never automatically refreshes an actively generating page, even after an hour', () => {
+  it('refreshes a stale busy page only for the awaited turn after the inactivity threshold', () => {
     const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 1, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, staleRefreshMinutes: 2, now: 0 });
     const busy = { ...page(120_001), status: 'BUSY' as const, busySignal: true, finalSignal: false };
     expect(shouldRefreshStaleBusy(task, busy, 119_999)).toBe(false);
     task.lastCompletedTurnId = 'u1';
-    expect(shouldRefreshStaleBusy(task, busy, 120_001)).toBe(false);
-    expect(shouldRefreshStaleBusy(task, busy, 3_600_000)).toBe(false);
-    expect(shouldRefreshStaleBusy(task, { ...busy, busySignal: false }, 120_001)).toBe(false);
+    expect(shouldRefreshStaleBusy(task, busy, 120_001)).toBe(true);
+    expect(shouldRefreshStaleBusy(task, busy, 3_600_000)).toBe(true);
+    expect(shouldRefreshStaleBusy(task, { ...busy, lastUserTurnId: 'other-user' }, 120_001)).toBe(false);
+    expect(shouldRefreshStaleBusy(task, { ...busy, status: 'UNKNOWN' }, 120_001)).toBe(false);
+    expect(shouldRefreshStaleBusy(task, { ...busy, editorEmpty: false }, 120_001)).toBe(false);
+    expect(shouldRefreshStaleBusy(task, { ...busy, hasPendingAttachment: true }, 120_001)).toBe(false);
   });
 
   it('counts process activity without turning it into answer completion', () => {
     const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 1, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, staleRefreshMinutes: 2, now: 0 });
     task.lastCompletedTurnId = 'u1';
-    const pending = { ...page(), finalSignal: false, activityFingerprint: 'progress-1' };
+    const pending = { ...page(), status: 'BUSY' as const, busySignal: true, finalSignal: false, activityFingerprint: 'progress-1' };
     const first = reduceTask(task, { type: 'OBSERVATION', snapshot: pending, now: 1 });
     const later = { ...pending, activityFingerprint: 'progress-2' };
     const changed = reduceTask(first, { type: 'OBSERVATION', snapshot: later, now: 120_000 });

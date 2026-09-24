@@ -20,12 +20,12 @@ export function reduceTask(task: TaskRecord, event: TaskEvent): TaskRecord {
     const { snapshot, now } = event;
     const answerChanged = snapshot.answerFingerprint !== task.lastAnswerFingerprint;
     const activityChanged = (snapshot.activityFingerprint ?? null) !== (task.lastActivityFingerprint ?? null);
-    const generationEnded = task.lastBusySignal === true && !snapshot.busySignal;
+    const generationChanged = typeof task.lastBusySignal === 'boolean' && task.lastBusySignal !== snapshot.busySignal;
     const stableSince = answerChanged ? now : task.stableSince;
     if (task.state === 'WAITING_ANSWER' && snapshot.errorSignal) return { ...bump(task), state: 'PAUSED', pauseReason: 'ERROR_ON_PAGE', lastObservationAt: now };
     return { ...task, stableSince, lastAnswerFingerprint: snapshot.answerFingerprint,
       lastActivityFingerprint: snapshot.activityFingerprint ?? null, lastBusySignal: snapshot.busySignal,
-      lastObservationAt: now, lastProgressAt: answerChanged || activityChanged || generationEnded ? now : (task.lastProgressAt ?? now) };
+      lastObservationAt: now, lastProgressAt: answerChanged || activityChanged || generationChanged ? now : (task.lastProgressAt ?? now) };
   }
   if (event.type === 'ATTEMPT_COMMITTED') return { ...bump(task), state: 'SUBMITTING', pendingAttempt: event.attempt };
   if (event.type === 'COMMAND_SENT') return { ...task, state: 'VERIFYING_SUBMIT', pendingAttempt: task.pendingAttempt ? { ...task.pendingAttempt, phase: 'COMMAND_SENT' } : null };

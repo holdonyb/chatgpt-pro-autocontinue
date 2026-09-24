@@ -16,7 +16,7 @@ This project drives only visible page UI. It is not an API client and does not u
 
 Chrome may throttle timers, rendering, and page work in hidden tabs. A Manifest V3 service worker can still wake on alarms, but it cannot force the ChatGPT web app to keep its real-time connection or UI rendering active. A long answer can therefore be complete on the server while a background page remains stale until it is refreshed.
 
-The “stale refresh” setting is a recovery probe, not a keep-alive. Since v0.2.10, it applies only when the page no longer shows generation, the awaited answer is incomplete, and there has been no observable answer or current-turn process activity for the configured interval. A final probe must still pass before reloading. While generation is indicated, no automatic refresh occurs, even if the page might be stuck. The extension excludes stop-generation controls from sending. Refresh effects on server-side work have not been established; a refresh is not proof of completion or guaranteed harmless to an active response.
+The “stale refresh” setting is a recovery probe, not a keep-alive. Since v0.2.11, an incomplete awaited answer may trigger a refresh after no observable answer or current-turn process progress for the configured interval (default 15 minutes), even while the page still displays generation. Progress and changes in generation state restart this interval. A final probe must still pass before reloading. The extension excludes stop-generation controls from sending. Page evidence cannot distinguish silent computation from a stale connection; a refresh is not proof of completion or guaranteed harmless to server-side work.
 
 See [limitations](docs/LIMITATIONS.md) for the exact boundaries.
 
@@ -39,11 +39,15 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
-### v0.2.10: protect long-running generation
+### v0.2.11: recover a stuck generation indicator
 
-Active generation blocks automatic reloads. Current-turn tool/progress text contributes a hashed activity fingerprint; it never counts as answer-completion evidence. When generation controls disappear, a full stale interval starts before recovery can reload. Page state is checked again immediately before committing a reload.
+Automatic refresh remains available while the page displays generation, once the configured inactivity threshold is reached. This supersedes v0.2.10's blanket busy-page exclusion. Current-turn process progress and final-answer changes reset the timer; a fresh pre-reload probe cancels recovery if progress or generation state changed. Identity checks, draft protection, the three-refresh allowance per awaited turn, and uncertain-send deduplication remain in force. Logs distinguish `cause=busy-no-progress` from `cause=awaiting-submitted-answer`. Refresh itself never counts as completion and does not send a follow-up.
 
-`SEND_CLICK_REPORTED` records the intended send control, click-attempt time and reported outcome when a content-script reply arrives. A missing reply still means uncertainty; absence of this log is not proof of no click. No research text is included. A permanently stale busy indicator now requires manual inspection rather than automatic refresh.
+### v0.2.10: progress tracking and click diagnostics (refresh policy superseded above)
+
+Current-turn tool/progress text contributes a hashed activity fingerprint; it never counts as answer-completion evidence. When generation controls disappear, a full stale interval starts before recovery can reload. Page state is checked again immediately before committing a reload.
+
+`SEND_CLICK_REPORTED` records the intended send control, click-attempt time and reported outcome when a content-script reply arrives. A missing reply still means uncertainty; absence of this log is not proof of no click. No research text is included.
 
 ### v0.2.9: recovery timeout recheck
 

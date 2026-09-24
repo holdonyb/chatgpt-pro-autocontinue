@@ -36,8 +36,14 @@ The extension cannot make progress while Chrome or the computer is stopped. Dead
 
 `RELOAD_WAITING_FOR_IDENTITY` records `missing=conversation,branch,mode,page-status` as applicable, plus the normal snapshot metadata and model-selection evidence. It records neither page HTML nor answer text. The timeout message uses the latest verification result, and an already established specific pause reason is retained. These diagnostics describe observed conditions; they do not prove a network disconnect or server-side failure.
 
-## v0.2.10 generation protection
+## v0.2.10 progress tracking (reload policy updated in v0.2.11 below)
 
 The earlier busy-page refresh behavior is superseded: `BUSY` or a generation control prevents automatic reload regardless of elapsed time. Current assistant-turn process text after the latest user message is hashed for progress tracking. Progress never authorizes sending; independent final-answer evidence is still required. A busy-to-idle transition restarts the inactivity window. Recovery on a non-busy incomplete answer uses a final bounded page check; newly observed progress, generation, drafts or identity changes cancel the reload. `STALE_BUSY_RELOAD` retains its historical event name, but now records `cause=awaiting-submitted-answer action=tabs.reload busy=false`.
 
 The click attempt's normalized target and timestamp are returned with either acceptance or uncertainty and persisted as `SEND_CLICK_REPORTED`. If that reply is lost, the pending attempt remains uncertain and no click evidence can be claimed. This is not a complete browser-wide click audit. Live server-side cancellation by refresh has not been established.
+
+## v0.2.11 inactivity recovery, including BUSY
+
+The v0.2.10 blanket prohibition on busy-page reloads is removed. The awaited turn may be refreshed in READY or BUSY after the configured interval without current-turn answer/process progress. Generation-state transitions in either direction restart the interval, but an unchanged generation indicator does not. Before refresh a fresh snapshot is processed through the usual identity, draft, progress and completion guards; any new progress cancels that reload. `STALE_BUSY_RELOAD` records `cause=busy-no-progress action=tabs.reload busy=true` for stale busy pages and `cause=awaiting-submitted-answer ... busy=false` for idle incomplete pages.
+
+Rebinding restarts the inactivity and completion stability windows and retains the budget and consumed turns. Pending sends are not reloaded or replayed. The existing limit of three automatic refreshes per awaited user turn still applies. Reload uses `chrome.tabs.reload`, never a Stop-generation click. The browser DOM does not prove whether silent server computation is still progressing, so this recovery policy cannot promise that every refresh is harmless.

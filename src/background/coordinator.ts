@@ -310,7 +310,7 @@ export async function checkAlarm(source = 'periodic'): Promise<void> {
       return;
     }
     const reloading = { ...reduceTask(refreshed.task, { type: 'CONTROLLED_RELOAD_STARTED', now }), recoveryTurnId: reloadPage.lastUserTurnId, recoveryReloads: reloads + 1 };
-    refreshed = addLog({ ...refreshed, task: reloading }, 'STALE_BUSY_RELOAD', reloading, now, `cause=awaiting-submitted-answer action=tabs.reload busy=false idleMs=${now - (refreshed.task.lastProgressAt ?? now)} thresholdMs=${refreshed.task.staleRefreshMs ?? 15 * 60_000}`);
+    refreshed = addLog({ ...refreshed, task: reloading }, 'STALE_BUSY_RELOAD', reloading, now, `cause=${reloadPage.busySignal ? 'busy-no-progress' : 'awaiting-submitted-answer'} action=tabs.reload busy=${reloadPage.busySignal} idleMs=${now - (refreshed.task.lastProgressAt ?? now)} thresholdMs=${refreshed.task.staleRefreshMs ?? 15 * 60_000}`);
     await saveState(refreshed);
     try { await withTimeout(chrome.tabs.reload(reloading.boundTabId), 5_000, '刷新请求超时，请检查原标签页后继续'); }
     catch (error) { await control('PAUSE', 'TAB_UNAVAILABLE', error instanceof Error ? error.message : String(error)); }
