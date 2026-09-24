@@ -29,6 +29,40 @@ function messageId(node: Element): string | null {
 
 function messages(): Element[] { return Array.from(document.querySelectorAll(MESSAGE_SELECTORS)).filter((n) => messageId(n)); }
 
+function isVisible(node: Element): boolean {
+  for (let parent: Element | null = node; parent; parent = parent.parentElement) {
+    if (parent.hasAttribute('hidden') || parent.getAttribute('aria-hidden') === 'true') return false;
+    const style = getComputedStyle(parent);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+  }
+  return true;
+}
+
+function generationEvidence(lastUser: Element | null, lastAssistant: Element | null, editor: Element | null) {
+  const composer = editor?.closest('form, [data-composer-body]') ?? editor?.parentElement;
+  const candidates = new Set([
+    ...document.querySelectorAll('button[data-testid="stop-button"], button[data-testid="composer-stop-button"]'),
+    ...(composer?.querySelectorAll('button, [role="button"]') ?? [])
+  ]);
+  const stopControls = Array.from(candidates).filter(node => {
+    // Research titles can contain "Stop" or "停止"; never read them as controls.
+    if (node.closest('[data-message-author-role], [data-testid^="conversation-turn"], article, nav, aside, [role="menu"], [role="dialog"]') || !isVisible(node)) return false;
+    const label = node.getAttribute('aria-label')?.replace(/\s+/g, ' ').trim() ?? '';
+    if (/record|voice|audio|录音|语音|听写/i.test(label)) return false;
+    return ['stop-button', 'composer-stop-button'].includes(node.getAttribute('data-testid') ?? '') ||
+      /^(?:stop(?: generating| generation| response)?|停止(?:生成|回答|响应|回复)?)$/i.test(label);
+  });
+  const streaming = Array.from(document.querySelectorAll('[data-is-streaming="true"]')).filter(node => {
+    if (!isVisible(node)) return false;
+    const assistantScope = node.closest('[data-message-author-role="assistant"], [data-turn="assistant"]') ||
+      (lastAssistant && node.contains(lastAssistant));
+    if (!assistantScope) return false;
+    return lastUser ? Boolean(lastUser.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) :
+      Boolean(lastAssistant && (lastAssistant.contains(node) || node.contains(lastAssistant)));
+  });
+  return { busy: stopControls.length > 0 || streaming.length > 0, stopControls: stopControls.length, streaming: streaming.length };
+}
+
 function activityFingerprint(lastUser: Element | null): string | null {
   if (!lastUser) return null;
   // Process/tool cards can live outside data-message-author-role nodes. Only
@@ -101,7 +135,9 @@ export function readSnapshot(documentId: string): PageSnapshot {
   const lastAssistantId = lastAssistant ? messageId(lastAssistant) : null;
   const answerText = text(lastAssistant);
   const answerRawText = rawText(lastAssistant);
-  const busySignal = Boolean(document.querySelector('[data-is-streaming="true"], [data-testid*="stop" i], button[aria-label*="Stop" i], button[aria-label*="停止"]'));
+  const editor = findComposerEditor();
+  const generation = generationEvidence(lastUser, lastAssistant, editor);
+  const busySignal = generation.busy;
   const errorSignal = Boolean(document.querySelector('[role="alert"], [data-testid*="error" i]')) &&
     /error|错误|try again|重试/i.test(text(document.querySelector('[role="alert"], [data-testid*="error" i]')));
   // This is only a candidate until DOM_OBSERVATIONS records the live page's completion marker.
@@ -117,7 +153,6 @@ export function readSnapshot(documentId: string): PageSnapshot {
   // If the live page exposes no branch marker, the first stable message is the weakest fallback.
   const branchFingerprint = branchNode?.getAttribute('data-conversation-branch-id') ||
     branchNode?.getAttribute('data-branch-id') || conversationKeyFromUrl();
-  const editor = findComposerEditor();
   const editorValue = composerValue(editor);
   const hasPendingAttachment = Boolean(document.querySelector('[data-testid*="attachment" i], [aria-label*="attachment" i], [aria-label*="附件"]'));
   const lastRole = last?.getAttribute('data-message-author-role');
@@ -125,7 +160,7 @@ export function readSnapshot(documentId: string): PageSnapshot {
     conversationKey: conversationKeyFromUrl(), url: location.href, documentId,
     activityFingerprint: activityFingerprint(lastUser),
     visibility: document.visibilityState, focused: document.hasFocus(), wasDiscarded: Boolean((document as Document & { wasDiscarded?: boolean }).wasDiscarded),
-    completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0}`,
+    completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0} stopControls=${generation.stopControls} streaming=${generation.streaming}`,
     branchFingerprint, modeFingerprint: model.fingerprint, modeLabel: model.label, modeDetail: model.detail,
     status: errorSignal ? 'ERROR' : busySignal ? 'BUSY' : model.fingerprint ? 'READY' : 'UNKNOWN',
     lastMessageRole: lastRole === 'user' || lastRole === 'assistant' ? lastRole : 'unknown',

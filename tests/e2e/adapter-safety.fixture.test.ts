@@ -67,6 +67,49 @@ describe('page adapter safety fixture', () => {
     expect(snapshot.status).toBe('BUSY');
   });
 
+  it.each(['停止距离计算校验', 'Stopping distance verification', 'Stop generating'])('does not treat a research-card button as generation: %s', label => {
+    const turn = document.createElement('section');
+    turn.dataset.testid = 'conversation-turn-2';
+    const button = document.createElement('button');
+    button.setAttribute('aria-label', label);
+    turn.append(button);
+    document.body.append(turn);
+    expect(readSnapshot('d1').busySignal).toBe(false);
+    expect(readSnapshot('d1').finalSignal).toBe(true);
+  });
+
+  it('requires an exact known stop test id rather than a substring', () => {
+    document.body.insertAdjacentHTML('beforeend', '<button data-testid="nonstop-research-action">研究</button>');
+    expect(readSnapshot('d1').busySignal).toBe(false);
+  });
+
+  it.each(['hidden', 'aria-hidden="true"', 'style="display:none"', 'style="visibility:hidden"'])('ignores hidden stop controls under %s', attribute => {
+    document.body.insertAdjacentHTML('beforeend', `<div ${attribute}><button data-testid="stop-button"></button></div>`);
+    expect(readSnapshot('d1').busySignal).toBe(false);
+  });
+
+  it.each(['Stop generating', '停止生成', '停止回答'])('recognizes an exact stop label inside the composer: %s', label => {
+    const form = document.createElement('form');
+    form.append(document.querySelector('textarea')!);
+    const stop = document.createElement('button');
+    stop.setAttribute('aria-label', label);
+    form.append(stop);
+    document.body.append(form);
+    expect(readSnapshot('d1').busySignal).toBe(true);
+    expect(readSnapshot('d1').finalSignal).toBe(false);
+  });
+
+  it('ignores streaming flags from earlier turns but detects the current assistant turn', () => {
+    const prior = document.createElement('div');
+    prior.setAttribute('data-message-author-role', 'assistant');
+    prior.setAttribute('data-message-id', 'old');
+    prior.setAttribute('data-is-streaming', 'true');
+    document.body.prepend(prior);
+    expect(readSnapshot('d1').busySignal).toBe(false);
+    document.querySelector('[data-message-id="a1"]')!.setAttribute('data-is-streaming', 'true');
+    expect(readSnapshot('d1').busySignal).toBe(true);
+  });
+
   it('reads Pro from an accessible model control label', () => {
     Array.from(document.querySelectorAll('button')).find((button) => button.textContent === '6 Pro')?.remove();
     const model = document.createElement('button');

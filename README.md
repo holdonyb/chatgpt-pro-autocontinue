@@ -39,6 +39,10 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.13: distinguish generation controls from research titles
+
+Research-card titles containing “Stop” or “停止” no longer mark the page as generating. Busy detection uses exact known stop-control IDs outside message/navigation content, or exact generation-stop labels in the composer; hidden controls are excluded. Streaming evidence is limited to assistant content after the latest user message. Diagnostics include matched stop-control and streaming-marker counts without storing titles. The inactivity refresh and completion-stability rules remain unchanged.
+
 ### v0.2.12: distinguish page-read failures
 
 Read failures now record a normalized cause (timeout, missing receiver, closed channel, invalid extension context, missing tab, snapshot exception or invalid reply) and elapsed time. A separate browser-owned tab query records frozen/discarded/active/loading state when available, even if the page script does not reply. Raw exception text and URLs are not logged. This diagnoses loss of communication; it does not automatically imply a network failure or stopped ChatGPT response.
