@@ -308,6 +308,127 @@ describe('background observation ownership', () => {
 });
 
 describe('bounded recovery', () => {
+  it.each(['controlledReloadAt', 'identityWaitSince'] as const)('checks the live page before expiring %s, preserving budget and fresh stability', async field => {
+    const before = await loadState();
+    before.task![field] = Date.now() - 121_000;
+    await saveState(before);
+    currentPage = snapshot({ documentId: 'recovered' });
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    const after = (await loadState()).task!;
+    expect(after.state).toBe('WAITING_ANSWER');
+    expect(after.boundDocumentId).toBe('recovered');
+    expect(after.confirmedSends).toBe(2);
+    expect(after.deadlineAt).toBe(before.task!.deadlineAt);
+    expect(after.consumedTurnIds).toEqual(before.task!.consumedTurnIds);
+    expect(sends()).toHaveLength(0);
+    vi.setSystemTime(Date.now() + 11_000);
+    await checkAlarm();
+    await checkAlarm();
+    expect(sends()).toHaveLength(1);
+  });
+
+  it('keeps waiting if the final recovery probe finds the answer still busy', async () => {
+    const state = await loadState();
+    state.task!.controlledReloadAt = Date.now() - 121_000;
+    await saveState(state);
+    currentPage = snapshot({ documentId: 'recovered', status: 'BUSY', busySignal: true, finalSignal: false });
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    expect((await loadState()).task?.state).toBe('WAITING_ANSWER');
+    expect((await loadState()).task?.controlledReloadAt).toBeNull();
+    expect(sends()).toHaveLength(0);
+  });
+
+  it.each([
+    [{ conversationKey: 'other' }, 'CONVERSATION_CHANGED'],
+    [{ branchFingerprint: 'other' }, 'BRANCH_CHANGED'],
+    [{ modeFingerprint: '7 pro' }, 'MODE_CHANGED'],
+    [{ editorEmpty: false }, 'USER_DRAFT']
+  ] as const)('keeps the specific guard for a recovered page with %j', async (change, reason) => {
+    const state = await loadState();
+    state.task!.controlledReloadAt = Date.now() - 121_000;
+    await saveState(state);
+    currentPage = snapshot({ documentId: 'recovered', ...change });
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    expect((await loadState()).task?.pauseReason).toBe(reason);
+    expect(sends()).toHaveLength(0);
+  });
+
+  it('logs each missing recovery condition and mode evidence, without copying answer content', async () => {
+    currentPage = snapshot({ documentId: 'loading', conversationKey: null, branchFingerprint: null,
+      modeFingerprint: null, status: 'UNKNOWN', modeDetail: 'source=none candidates=0', answerFingerprint: 'PRIVATE_ANSWER' });
+    await observe(currentPage);
+    const log = (await loadState()).logs.at(-1)!;
+    expect(log.event).toBe('RELOAD_WAITING_FOR_IDENTITY');
+    expect(log.detail).toContain('missing=conversation,branch,mode,page-status');
+    expect(log.detail).toContain('status=UNKNOWN');
+    expect(log.detail).toContain('modeEvidence=[source=none candidates=0]');
+    expect(log.detail).not.toContain('PRIVATE_ANSWER');
+    vi.setSystemTime(Date.now() + 121_000);
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    expect((await loadState()).task?.statusDetail).toContain('对话、分支、模型、页面状态');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it('performs a bounded final probe and explains an unresponsive recovery page', async () => {
+    const state = await loadState();
+    state.task!.controlledReloadAt = Date.now() - 121_000;
+    await saveState(state);
+    sendMessage.mockImplementation(() => new Promise(() => undefined));
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    const check = checkAlarm();
+    await vi.advanceTimersByTimeAsync(5_001);
+    await check;
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect((await loadState()).task?.pauseReason).toBe('PAGE_RECOVERY_FAILED');
+    expect((await loadState()).task?.statusDetail).toContain('页面未回应');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it('does not treat the old document as a completed reload', async () => {
+    const state = await loadState();
+    state.task!.controlledReloadAt = Date.now() - 121_000;
+    await saveState(state);
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    expect(sendMessage).toHaveBeenCalled();
+    expect((await loadState()).task?.pauseReason).toBe('PAGE_RECOVERY_FAILED');
+    expect((await loadState()).task?.statusDetail).toContain('仍是刷新前的页面');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it('uses the latest identity verification for timeout diagnostics instead of the first snapshot', async () => {
+    const state = await loadState();
+    state.task!.controlledReloadAt = Date.now() - 121_000;
+    await saveState(state);
+    sendMessage.mockResolvedValueOnce(snapshot({ documentId: 'loading', modeFingerprint: null, status: 'UNKNOWN' }));
+    currentPage = snapshot({ documentId: 'loading', branchFingerprint: null });
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    const after = await loadState();
+    expect(after.task?.statusDetail).toContain('仍无法识别：分支');
+    expect(after.task?.statusDetail).not.toContain('模型');
+    expect(after.logs.find(log => log.event === 'RELOAD_WAITING_FOR_IDENTITY')?.detail).toContain('missing=branch');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it('preserves pending-send uncertainty when the final recovery probe succeeds', async () => {
+    const state = await loadState();
+    state.task!.controlledReloadAt = Date.now() - 121_000;
+    state.task!.pendingAttempt = { attemptId: 'pending', sourceAnswerId: 'a2', expectedParentTurnId: 'a2', previousUserTurnId: 'u2', promptDigest: '', phase: 'COMMAND_SENT', createdAt: Date.now() - 121_000, confirmedUserMessageId: null };
+    await saveState(state);
+    currentPage = snapshot({ documentId: 'recovered' });
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    expect((await loadState()).task?.pauseReason).toBe('SEND_UNCERTAIN');
+    expect((await loadState()).task?.pendingAttempt?.attemptId).toBe('pending');
+    expect((await loadState()).task?.confirmedSends).toBe(2);
+    expect(sends()).toHaveLength(0);
+  });
+
   it('rebinds a legacy generic Pro label only on manual Resume with matching conversation and branch', async () => {
     const state = await loadState();
     state.task!.state = 'PAUSED';

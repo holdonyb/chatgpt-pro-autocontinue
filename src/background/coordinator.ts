@@ -16,6 +16,30 @@ function snapshotDetail(snapshot: PageSnapshot, task: TaskRecord | null, source 
   return `source=${source} status=${snapshot.status} final=${snapshot.finalSignal} busy=${snapshot.busySignal} error=${snapshot.errorSignal} editorEmpty=${snapshot.editorEmpty} attachment=${snapshot.hasPendingAttachment} role=${snapshot.lastMessageRole} assistant=${short(snapshot.lastAssistantAnswerId)} user=${short(snapshot.lastUserTurnId)} branch=${short(snapshot.branchFingerprint)} mode=${snapshot.modeFingerprint ?? '-'} stableMs=${stableMs} visibility=${snapshot.visibility ?? '-'} focused=${snapshot.focused ?? '-'} discarded=${snapshot.wasDiscarded ?? '-'} sampleAgeMs=${Math.max(0, now - snapshot.observedAt)}${snapshot.modeDetail ? ` modeEvidence=[${snapshot.modeDetail}]` : ''}${snapshot.completionDetail ? ` completion=[${snapshot.completionDetail}]` : ''}`;
 }
 
+const recoveryLabels = { conversation: '对话', branch: '分支', mode: '模型', 'page-status': '页面状态' };
+function missingRecoveryEvidence(page: PageSnapshot): (keyof typeof recoveryLabels)[] {
+  const missing: (keyof typeof recoveryLabels)[] = [];
+  if (!page.conversationKey) missing.push('conversation');
+  if (!page.branchFingerprint) missing.push('branch');
+  if (!page.modeFingerprint) missing.push('mode');
+  if (page.status === 'UNKNOWN') missing.push('page-status');
+  return missing;
+}
+
+function recoveryExpired(task: TaskRecord, now = Date.now()): boolean {
+  const since = task.controlledReloadAt ?? task.identityWaitSince;
+  return since != null && now - since >= 120_000;
+}
+
+async function pauseRecovery(task: TaskRecord, page: PageSnapshot | null): Promise<void> {
+  const missing = page ? missingRecoveryEvidence(page) : [];
+  const cause = !page ? '页面未回应，无法确认加载状态'
+    : page.documentId === task.boundDocumentId ? '仍是刷新前的页面，尚未确认新页面'
+    : missing.length ? `仍无法识别：${missing.map(key => recoveryLabels[key]).join('、')}`
+    : '页面在复查期间发生变化，尚未确认当前页面';
+  await control('PAUSE', 'PAGE_RECOVERY_FAILED', `刷新后超过 2 分钟，最后复查${cause}。请打开原标签页检查加载或登录状态，再点击继续；原计数和时限保留。`);
+}
+
 async function observeTab(tabId: number): Promise<PageSnapshot | null> {
   try { return await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'GET_SNAPSHOT' }, { frameId: 0 }), 5_000, '目标页面 5 秒内未回应'); } catch { return null; }
 }
@@ -119,7 +143,9 @@ async function dispatch(task: TaskRecord, snapshot: PageSnapshot): Promise<void>
 // Transport identity is supplied by Chrome, never trusted from the page payload.
 export interface ObservationSender { tabId: number | undefined; frameId: number | undefined; }
 
-export async function onObservation(message: PageObservationRequest, sender: ObservationSender): Promise<void> {
+// During an unverified rebind, return the last probed page (null if unreachable)
+// so an alarm's timeout diagnostic describes the freshest evidence, not its first sample.
+export async function onObservation(message: PageObservationRequest, sender: ObservationSender): Promise<PageSnapshot | null | undefined> {
   let state = await loadState();
   if (!state.task) return;
   let before = state.task;
@@ -141,7 +167,7 @@ export async function onObservation(message: PageObservationRequest, sender: Obs
     const current = await observeTab(before.boundTabId);
     if (!current?.documentId || current.documentId !== message.snapshot.documentId) {
       await saveState(addLog(state, 'OBSERVATION_IGNORED_DOCUMENT', before, now, transportDetail));
-      return;
+      return current;
     }
     message = { ...message, snapshot: current };
     if (before.pendingAttempt) {
@@ -153,11 +179,13 @@ export async function onObservation(message: PageObservationRequest, sender: Obs
       : current.branchFingerprint && current.branchFingerprint !== before.branchFingerprint ? 'BRANCH_CHANGED'
       : current.modeFingerprint && current.modeFingerprint !== before.modeFingerprint ? 'MODE_CHANGED' : null;
     if (mismatch) { await control('PAUSE', mismatch, transportDetail); return; }
-    if (!current.conversationKey || !current.branchFingerprint || !current.modeFingerprint || current.status === 'UNKNOWN') {
+    const missing = missingRecoveryEvidence(current);
+    if (missing.length) {
       before = { ...before, identityWaitSince: before.identityWaitSince ?? now };
       state = { ...state, task: before };
-      await saveState(addLog(state, 'RELOAD_WAITING_FOR_IDENTITY', before, now, transportDetail));
-      return;
+      await saveState(addLog(state, 'RELOAD_WAITING_FOR_IDENTITY', before, now,
+        `${transportDetail} missing=${missing.join(',')} ${snapshotDetail(current, before, message.source, Date.now())}`));
+      return current;
     }
     const reloadKind = before.controlledReloadAt != null ? 'controlled' : 'page-refresh';
     before = reduceTask(before, { type: 'DOCUMENT_REBOUND', documentId: current.documentId, now });
@@ -229,10 +257,11 @@ export async function checkAlarm(source = 'periodic'): Promise<void> {
     }
     return;
   }
-  const recoveringSince = state.task.controlledReloadAt ?? state.task.identityWaitSince;
-  if (recoveringSince != null && Date.now() - recoveringSince >= 120_000) {
-    await control('PAUSE', 'PAGE_RECOVERY_FAILED', '刷新后超过 2 分钟仍未确认目标页面。请打开原标签页检查加载或登录状态，再点击继续。');
-    return;
+  // A delayed alarm may wake after the page has already recovered. Read it before
+  // deciding that the recovery deadline expired; normal rebind/dispatch guards apply.
+  if (recoveryExpired(state.task)) {
+    state.logs = addLog(state, 'RECOVERY_FINAL_CHECK', state.task, Date.now(), 'reason=identity-timeout').logs;
+    await saveState(state);
   }
   const snapshot = await observeTab(state.task.boundTabId);
   if (!snapshot) {
@@ -240,15 +269,23 @@ export async function checkAlarm(source = 'periodic'): Promise<void> {
     const failures = (state.task.failedPageChecks ?? 0) + 1;
     state.task = { ...state.task, failedPageChecks: failures };
     await saveState(addLog(state, 'PAGE_CHECK_FAILED', state.task, Date.now(), `consecutive=${failures}/3`));
-    if (failures >= 3) await control('PAUSE', 'TAB_UNAVAILABLE', '连续 3 次无法读取目标页面。请打开原标签页、确认登录并刷新，再点击继续；原计数和时限保留。');
+    if (recoveryExpired(state.task)) await pauseRecovery(state.task, null);
+    else if (failures >= 3) await control('PAUSE', 'TAB_UNAVAILABLE', '连续 3 次无法读取目标页面。请打开原标签页、确认登录并刷新，再点击继续；原计数和时限保留。');
     return;
   }
   if (state.task.failedPageChecks) {
     state.task = { ...state.task, failedPageChecks: 0 };
     await saveState(addLog(state, 'PAGE_CONNECTION_RECOVERED', state.task));
   }
-  await onObservation({ type: 'PAGE_OBSERVATION', snapshot, source: `alarm:${source}` }, { tabId: state.task.boundTabId, frameId: 0 });
+  const recoveryPage = await onObservation({ type: 'PAGE_OBSERVATION', snapshot, source: `alarm:${source}` }, { tabId: state.task.boundTabId, frameId: 0 });
   let refreshed = await loadState();
+  if (!refreshed.task || ['PAUSED', 'STOPPED', 'FINISHED'].includes(refreshed.task.state)) return;
+  // Re-read persisted recovery state: a verified rebind clears these timestamps.
+  // Do not reset the timeout when the fresh page is still incomplete.
+  if (recoveryExpired(refreshed.task)) {
+    await pauseRecovery(refreshed.task, recoveryPage === undefined ? snapshot : recoveryPage);
+    return;
+  }
   if (refreshed.task && shouldRefreshStaleBusy(refreshed.task, snapshot, Date.now())) {
     const now = Date.now();
     const reloads = refreshed.task.recoveryTurnId === snapshot.lastUserTurnId ? (refreshed.task.recoveryReloads ?? 0) : 0;

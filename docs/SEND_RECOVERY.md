@@ -18,7 +18,7 @@ Validation uses mocked Chrome APIs and jsdom with controlled time. Real browser 
 | Send command arrives late, or waits through a long suspension | Check its absolute 20-second lease and task deadline before touching the editor and again immediately before clicking. An expired command cannot click. |
 | Send reply is lost | After 25 seconds, retain the pending attempt and pause. A timeout does not prove no click occurred. Late replies do not increment counts or trigger retries. |
 | Worker restarts with a pending attempt | Preserve uncertainty. A new user message alone does not prove that attempt was accepted. |
-| Refresh never completes identity recovery | Pause after 2 minutes; do not dispatch on incomplete identity. |
+| Refresh has not completed identity recovery after 2 minutes | Read the current page once more through the normal bounded snapshot and document-verification requests. If verified, rebind and restart completion stability; otherwise pause with the current missing conditions. Old documents, changed identity, drafts and uncertain sends cannot authorize a send. |
 | Same awaited user turn stays stale | Allow 3 automatic refreshes at the configured interval, then pause. Rebinding or worker restart does not reset this allowance. User Resume resets recovery counters only. |
 | Run expires while the page is unavailable | Finish without another page request; an unresolved send remains flagged for reconciliation. |
 | Duplicate Start or old run alarm arrives | Keep the current run and budget; ignore obsolete run alarms. |
@@ -29,3 +29,9 @@ Paused tasks show a toolbar `!`; subsequent alarms and tab events do not replace
 Known pre-click failure still leaves composer text for inspection. Clear or manually send that text as appropriate, then Resume. For legacy/uncertain attempts, inspect the conversation before ending the run and starting another; do not assume `0/N` proves nothing was sent. A task whose deadline has passed cannot be extended by Resume.
 
 The extension cannot make progress while Chrome or the computer is stopped. Deadlines are checked when execution resumes. Completion selectors and actual long-running web behavior still require field acceptance; automatic recovery does not bypass login, verification challenges, or site usage limits.
+
+## v0.2.9 recovery diagnostics
+
+`RECOVERY_FINAL_CHECK` marks a check that wakes after the recovery window. Each page request remains bounded to 5 seconds (subject to browser scheduling); verifying a new document can require a second request. A successful rebind clears recovery timestamps but preserves counts, consumed turns, refresh allowance and the original deadline. Completion still needs fresh stability before another send.
+
+`RELOAD_WAITING_FOR_IDENTITY` records `missing=conversation,branch,mode,page-status` as applicable, plus the normal snapshot metadata and model-selection evidence. It records neither page HTML nor answer text. The timeout message uses the latest verification result, and an already established specific pause reason is retained. These diagnostics describe observed conditions; they do not prove a network disconnect or server-side failure.

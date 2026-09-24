@@ -39,6 +39,12 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.9: recovery timeout recheck
+
+After the two-minute recovery window, the next check reads the current page before pausing. If the original conversation, branch and model are verified, it resumes waiting with a fresh completion stability window and preserves the run budget. It does not treat the old document or an uncertain send as recovered.
+
+Recovery logs now list missing identity conditions and model-selection evidence. If the final check fails, the popup distinguishes an unresponsive page, the old document, and missing conversation/branch/model/page status. Reload the extension, refresh the original tab, then Resume the paused task.
+
 ### v0.2.8: model evidence
 
 The composer model selector takes priority. Adjacent version/Pro spans (`6Pro`) now read as `6 Pro`; filenames such as `C065 Proof notes.md` cannot become a model fingerprint. Answer content, account navigation, hidden controls, and conflicting candidates are excluded or treated as unknown. Logs include selection source and candidate counts without copying arbitrary button text.
