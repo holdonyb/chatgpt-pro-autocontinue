@@ -26,6 +26,19 @@ describe('page adapter safety fixture', () => {
     expect(snapshot.editorEmpty).toBe(true);
   });
 
+  it('observes current-turn tool progress outside final-message nodes without claiming completion', () => {
+    document.body.insertAdjacentHTML('beforeend', '<section data-testid="conversation-turn-3" data-turn="user"><div data-message-author-role="user" data-message-id="u2">继续</div></section><section data-testid="conversation-turn-4" data-turn="assistant"><p>正在审查</p><button>运行实验</button></section>');
+    const first = readSnapshot('d1');
+    expect(first.activityFingerprint).toBeTruthy();
+    expect(first.activityFingerprint).not.toContain('正在审查');
+    document.querySelector('[data-turn="assistant"] p')!.textContent = '已完成第一次实验';
+    const second = readSnapshot('d1');
+    expect(second.activityFingerprint).not.toBe(first.activityFingerprint);
+    expect(second.finalSignal).toBe(false);
+    document.querySelector('[data-message-id="a1"]')!.textContent = '历史内容变化';
+    expect(readSnapshot('d1').activityFingerprint).toBe(second.activityFingerprint);
+  });
+
   it('does not treat an older completed answer or its terminal marker as the latest answer', () => {
     document.body.insertAdjacentHTML('beforeend', '<div data-message-author-role="user" data-message-id="u2">继续</div><div>正在搜索网页</div>');
     const page = readSnapshot('d1');
@@ -127,7 +140,7 @@ describe('page adapter safety fixture', () => {
     });
     const snapshot = readSnapshot('d1');
     const result = await executeSend({ type: 'EXECUTE_SEND', expiresAt: Date.now() + 20_000, runId: 'r1', revision: 1, attemptId: 'x2', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
-    expect(result, result.ok ? undefined : result.reason).toEqual({ ok: true, acceptedBy: 'user-turn', userMessageId: 'u2' });
+    expect(result, result.ok ? undefined : result.reason).toMatchObject({ ok: true, acceptedBy: 'user-turn', userMessageId: 'u2' });
     expect(editable.textContent).toBe('继续');
   });
 
@@ -149,7 +162,7 @@ describe('page adapter safety fixture', () => {
     });
     const snapshot = readSnapshot('d1');
     const result = await executeSend({ type: 'EXECUTE_SEND', expiresAt: Date.now() + 20_000, runId: 'r1', revision: 1, attemptId: 'x3', expectedConversationKey: 'test-conversation', expectedDocumentId: 'd1', expectedParentTurnId: 'a1', prompt: '继续' }, snapshot);
-    expect(result, result.ok ? undefined : result.reason).toEqual({ ok: true, acceptedBy: 'composer-cleared', userMessageId: null });
+    expect(result, result.ok ? undefined : result.reason).toMatchObject({ ok: true, acceptedBy: 'composer-cleared', userMessageId: null });
   });
 
   it('uses the conversation id as a stable branch fallback', () => {

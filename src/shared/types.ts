@@ -34,6 +34,7 @@ export type PauseReason =
 export type PageStatus = 'READY' | 'BUSY' | 'UNKNOWN' | 'ERROR';
 
 export interface PageSnapshot {
+  activityFingerprint?: string | null;
   modeDetail?: string;
   visibility?: string;
   focused?: boolean;
@@ -71,6 +72,8 @@ export interface PendingAttempt {
 }
 
 export interface TaskRecord {
+  lastActivityFingerprint?: string | null;
+  lastBusySignal?: boolean;
   schemaVersion: 1;
   runId: string;
   revision: number;
@@ -112,9 +115,11 @@ export interface StartRequest { type: 'START'; prompt: string; maxSends: number;
 export interface ControlRequest { type: 'PAUSE' | 'RESUME' | 'STOP' | 'GET_STATUS'; }
 export interface PageInfoRequest { type: 'GET_PAGE_INFO'; }
 export interface PageObservationRequest { type: 'PAGE_OBSERVATION'; snapshot: PageSnapshot; source?: string; }
-export type SendExecutionResult =
+export interface ClickEvidence { target: 'send'; testId: string; type: string; at: number; }
+export type SendExecutionResult = (
   | { ok: true; acceptedBy: 'busy' | 'user-turn' | 'composer-cleared'; userMessageId: string | null }
-  | { ok: false; reason: string; clicked?: boolean };
+  | { ok: false; reason: string; clicked?: boolean }
+) & { clickEvidence?: ClickEvidence };
 export interface ContentCommand {
   type: 'EXECUTE_SEND';
   runId: string;

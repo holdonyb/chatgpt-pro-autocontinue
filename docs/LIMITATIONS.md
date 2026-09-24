@@ -4,7 +4,7 @@
 
 The background service worker uses Chrome alarms to perform periodic checks, but the ChatGPT page is a separate renderer. Chrome may throttle hidden-page JavaScript and rendering, and may freeze or discard a tab under resource pressure. The extension cannot disable those browser policies or guarantee the ChatGPT page's live connection stays current.
 
-If the page remains observable but makes no qualifying progress for the configured interval, the extension reloads the bound tab. It verifies the same tab, conversation, branch, and model before accepting the new document. A refresh is a recovery attempt, not an instruction to stop generation and not evidence that a server-side answer has finished.
+Since v0.2.10, automatic refresh is blocked while generation is indicated. Recovery may reload only an identifiable, non-busy page with an incomplete awaited answer and no current-turn process or answer progress for the configured interval. Disappearance of generation controls starts a fresh interval. A final page check can cancel the reload. A stuck busy indicator requires manual inspection. DOM reads and browser reloads cannot form an atomic transaction; these checks reduce risk but cannot establish that server-side work has finished or that a reload cannot affect it.
 
 ## Completion evidence
 

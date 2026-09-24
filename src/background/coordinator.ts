@@ -13,7 +13,7 @@ export function serialized<T>(work: () => Promise<T>): Promise<T> { const result
 function short(value: string | null | undefined): string { return value ? value.slice(0, 12) : '-'; }
 function snapshotDetail(snapshot: PageSnapshot, task: TaskRecord | null, source = 'unknown', now = Date.now()): string {
   const stableMs = task?.stableSince === null || task?.stableSince === undefined ? 0 : Math.max(0, now - task.stableSince);
-  return `source=${source} status=${snapshot.status} final=${snapshot.finalSignal} busy=${snapshot.busySignal} error=${snapshot.errorSignal} editorEmpty=${snapshot.editorEmpty} attachment=${snapshot.hasPendingAttachment} role=${snapshot.lastMessageRole} assistant=${short(snapshot.lastAssistantAnswerId)} user=${short(snapshot.lastUserTurnId)} branch=${short(snapshot.branchFingerprint)} mode=${snapshot.modeFingerprint ?? '-'} stableMs=${stableMs} visibility=${snapshot.visibility ?? '-'} focused=${snapshot.focused ?? '-'} discarded=${snapshot.wasDiscarded ?? '-'} sampleAgeMs=${Math.max(0, now - snapshot.observedAt)}${snapshot.modeDetail ? ` modeEvidence=[${snapshot.modeDetail}]` : ''}${snapshot.completionDetail ? ` completion=[${snapshot.completionDetail}]` : ''}`;
+  return `source=${source} status=${snapshot.status} final=${snapshot.finalSignal} busy=${snapshot.busySignal} error=${snapshot.errorSignal} editorEmpty=${snapshot.editorEmpty} attachment=${snapshot.hasPendingAttachment} role=${snapshot.lastMessageRole} assistant=${short(snapshot.lastAssistantAnswerId)} user=${short(snapshot.lastUserTurnId)} branch=${short(snapshot.branchFingerprint)} mode=${snapshot.modeFingerprint ?? '-'} stableMs=${stableMs} idleMs=${task ? Math.max(0, now - task.lastProgressAt) : 0} activity=${snapshot.activityFingerprint ?? '-'} visibility=${snapshot.visibility ?? '-'} focused=${snapshot.focused ?? '-'} discarded=${snapshot.wasDiscarded ?? '-'} sampleAgeMs=${Math.max(0, now - snapshot.observedAt)}${snapshot.modeDetail ? ` modeEvidence=[${snapshot.modeDetail}]` : ''}${snapshot.completionDetail ? ` completion=[${snapshot.completionDetail}]` : ''}`;
 }
 
 const recoveryLabels = { conversation: '对话', branch: '分支', mode: '模型', 'page-status': '页面状态' };
@@ -62,6 +62,8 @@ export async function start(tabId: number, request: StartRequest): Promise<{ ok:
   const now = Date.now();
   const task = createTask({ conversationKey: snapshot.conversationKey, branchFingerprint: snapshot.branchFingerprint, tabId, documentId: snapshot.documentId, modeFingerprint: snapshot.modeFingerprint, prompt: request.prompt, maxSends: request.maxSends, hours: request.hours, staleRefreshMinutes: request.staleRefreshMinutes, now });
   task.lastAnswerFingerprint = snapshot.answerFingerprint;
+  task.lastActivityFingerprint = snapshot.activityFingerprint ?? null;
+  task.lastBusySignal = snapshot.busySignal;
   // The current user turn is the waiting baseline, not an automatic send.
   task.lastCompletedTurnId = snapshot.lastUserTurnId;
   task.stableSince = snapshot.answerFingerprint ? now : null;
@@ -121,6 +123,12 @@ async function dispatch(task: TaskRecord, snapshot: PageSnapshot): Promise<void>
   const command: ContentCommand = { type: 'EXECUTE_SEND', runId: state.task!.runId, revision: state.task!.revision, attemptId, expiresAt: Math.min(task.deadlineAt, Date.now() + 20_000), expectedConversationKey: state.task!.conversationKey, expectedDocumentId: state.task!.boundDocumentId, expectedParentTurnId: attempt.expectedParentTurnId, prompt: state.task!.prompt };
   try {
     const result = await withTimeout(chrome.tabs.sendMessage(state.task!.boundTabId, { type: 'EXECUTE_SEND', command }, { frameId: 0 }), 25_000, '发送确认等待超过 25 秒；结果未知，请核对页面，不会自动重发。');
+    if (result?.clickEvidence) {
+      state = await loadState();
+      const evidence = result.clickEvidence;
+      await saveState(addLog(state, 'SEND_CLICK_REPORTED', state.task, Date.now(),
+        `attempt=${short(attemptId)} target=send testId=${evidence.testId} type=${evidence.type} clickAt=${evidence.at} result=${result.ok ? 'accepted' : 'uncertain'}`));
+    }
     if (!result?.ok) {
       if (result?.clicked === false) {
         state = await loadState();
@@ -287,14 +295,22 @@ export async function checkAlarm(source = 'periodic'): Promise<void> {
     return;
   }
   if (refreshed.task && shouldRefreshStaleBusy(refreshed.task, snapshot, Date.now())) {
+    const reloadPage = await observeTab(refreshed.task.boundTabId);
+    if (!reloadPage) {
+      await saveState(addLog(refreshed, 'RELOAD_SKIPPED', refreshed.task, Date.now(), 'reason=final-probe-unavailable'));
+      return;
+    }
+    await onObservation({ type: 'PAGE_OBSERVATION', snapshot: reloadPage, source: 'before-reload' }, { tabId: refreshed.task.boundTabId, frameId: 0 });
+    refreshed = await loadState();
+    if (!refreshed.task || !shouldRefreshStaleBusy(refreshed.task, reloadPage, Date.now())) return;
     const now = Date.now();
-    const reloads = refreshed.task.recoveryTurnId === snapshot.lastUserTurnId ? (refreshed.task.recoveryReloads ?? 0) : 0;
+    const reloads = refreshed.task.recoveryTurnId === reloadPage.lastUserTurnId ? (refreshed.task.recoveryReloads ?? 0) : 0;
     if (reloads >= 3) {
       await control('PAUSE', 'PAGE_RECOVERY_FAILED', '本轮已自动刷新 3 次，仍无法确认完成。请检查目标页面后点击继续；不会补发或清空草稿。');
       return;
     }
-    const reloading = { ...reduceTask(refreshed.task, { type: 'CONTROLLED_RELOAD_STARTED', now }), recoveryTurnId: snapshot.lastUserTurnId, recoveryReloads: reloads + 1 };
-    refreshed = addLog({ ...refreshed, task: reloading }, 'STALE_BUSY_RELOAD', reloading, now, `cause=${snapshot.busySignal ? 'busy' : 'awaiting-submitted-answer'} idleMs=${now - (refreshed.task.lastProgressAt ?? now)} thresholdMs=${refreshed.task.staleRefreshMs ?? 15 * 60_000}`);
+    const reloading = { ...reduceTask(refreshed.task, { type: 'CONTROLLED_RELOAD_STARTED', now }), recoveryTurnId: reloadPage.lastUserTurnId, recoveryReloads: reloads + 1 };
+    refreshed = addLog({ ...refreshed, task: reloading }, 'STALE_BUSY_RELOAD', reloading, now, `cause=awaiting-submitted-answer action=tabs.reload busy=false idleMs=${now - (refreshed.task.lastProgressAt ?? now)} thresholdMs=${refreshed.task.staleRefreshMs ?? 15 * 60_000}`);
     await saveState(refreshed);
     try { await withTimeout(chrome.tabs.reload(reloading.boundTabId), 5_000, '刷新请求超时，请检查原标签页后继续'); }
     catch (error) { await control('PAUSE', 'TAB_UNAVAILABLE', error instanceof Error ? error.message : String(error)); }

@@ -47,11 +47,37 @@ describe('dispatch guards', () => {
     expect(result).toEqual({ ok: false, reason: 'COMPLETION_UNKNOWN' });
   });
 
-  it('refreshes only a busy page that has exceeded the no-progress threshold', () => {
+  it('never automatically refreshes an actively generating page, even after an hour', () => {
     const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 1, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, staleRefreshMinutes: 2, now: 0 });
     const busy = { ...page(120_001), status: 'BUSY' as const, busySignal: true, finalSignal: false };
     expect(shouldRefreshStaleBusy(task, busy, 119_999)).toBe(false);
-    expect(shouldRefreshStaleBusy(task, busy, 120_001)).toBe(true);
+    task.lastCompletedTurnId = 'u1';
+    expect(shouldRefreshStaleBusy(task, busy, 120_001)).toBe(false);
+    expect(shouldRefreshStaleBusy(task, busy, 3_600_000)).toBe(false);
     expect(shouldRefreshStaleBusy(task, { ...busy, busySignal: false }, 120_001)).toBe(false);
+  });
+
+  it('counts process activity without turning it into answer completion', () => {
+    const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 1, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, staleRefreshMinutes: 2, now: 0 });
+    task.lastCompletedTurnId = 'u1';
+    const pending = { ...page(), finalSignal: false, activityFingerprint: 'progress-1' };
+    const first = reduceTask(task, { type: 'OBSERVATION', snapshot: pending, now: 1 });
+    const later = { ...pending, activityFingerprint: 'progress-2' };
+    const changed = reduceTask(first, { type: 'OBSERVATION', snapshot: later, now: 120_000 });
+    expect(changed.lastProgressAt).toBe(120_000);
+    expect(canDispatch(changed, later, 120_001).ok).toBe(false);
+    expect(shouldRefreshStaleBusy(changed, later, 120_001)).toBe(false);
+    expect(shouldRefreshStaleBusy(changed, later, 240_001)).toBe(true);
+  });
+
+  it('waits a full stale interval after generation controls disappear', () => {
+    const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 1, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, staleRefreshMinutes: 2, now: 0 });
+    task.lastCompletedTurnId = 'u1';
+    const pending = { ...page(), finalSignal: false, busySignal: true, status: 'BUSY' as const };
+    const first = reduceTask(task, { type: 'OBSERVATION', snapshot: pending, now: 1 });
+    const idle = { ...pending, busySignal: false, status: 'READY' as const };
+    const changed = reduceTask(first, { type: 'OBSERVATION', snapshot: idle, now: 200_000 });
+    expect(changed.lastProgressAt).toBe(200_000);
+    expect(shouldRefreshStaleBusy(changed, idle, 200_001)).toBe(false);
   });
 });

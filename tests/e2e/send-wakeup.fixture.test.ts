@@ -58,7 +58,9 @@ it('checks the button after a timer wakeup even if wall time passed the polling 
   const clicked = vi.spyOn(button, 'click');
   vi.setSystemTime(Date.now() + 17_000);
   await vi.advanceTimersByTimeAsync(100);
-  expect((await pending).ok).toBe(true);
+  const result = await pending;
+  expect(result.ok).toBe(true);
+  expect(result).toMatchObject({ clickEvidence: { target: 'send', testId: 'send-button', type: 'button' } });
   expect(clicked).toHaveBeenCalledTimes(1);
 });
 it('rechecks busy state before clicking a button found after waiting', async () => {

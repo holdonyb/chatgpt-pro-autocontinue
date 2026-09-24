@@ -30,7 +30,7 @@ function publish(force = false, source = force ? 'stability-recheck' : 'page-cha
     if (!alive || !chrome.runtime?.id) { stopStaleScript(); return; }
   } catch { stopStaleScript(); return; }
   const value = snapshot();
-  const fingerprint = JSON.stringify([value.conversationKey, value.branchFingerprint, value.modeFingerprint, value.lastAssistantAnswerId, value.answerFingerprint, value.lastUserTurnId, value.status, value.finalSignal, value.busySignal, value.editorEmpty, value.hasPendingAttachment]);
+  const fingerprint = JSON.stringify([value.conversationKey, value.branchFingerprint, value.modeFingerprint, value.lastAssistantAnswerId, value.answerFingerprint, value.activityFingerprint, value.lastUserTurnId, value.status, value.finalSignal, value.busySignal, value.editorEmpty, value.hasPendingAttachment]);
   if (fingerprint === lastFingerprint && !force) return;
   lastFingerprint = fingerprint;
   const message: PageObservationRequest = { type: 'PAGE_OBSERVATION', snapshot: value, source };

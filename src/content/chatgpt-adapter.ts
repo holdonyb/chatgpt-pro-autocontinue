@@ -29,6 +29,24 @@ function messageId(node: Element): string | null {
 
 function messages(): Element[] { return Array.from(document.querySelectorAll(MESSAGE_SELECTORS)).filter((n) => messageId(n)); }
 
+function activityFingerprint(lastUser: Element | null): string | null {
+  if (!lastUser) return null;
+  // Process/tool cards can live outside data-message-author-role nodes. Only
+  // inspect assistant turns following the latest user; historical UI is irrelevant.
+  const turns = Array.from(document.querySelectorAll('[data-testid^="conversation-turn"][data-turn="assistant"]'))
+    .filter(node => Boolean(lastUser.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING));
+  if (!turns.length) return null;
+  const content = turns.map(node => {
+    const copy = node.cloneNode(true) as Element;
+    copy.querySelectorAll('script, style, [hidden], [aria-hidden="true"]').forEach(child => child.remove());
+    return text(copy).replace(/\b\d+\s*(?:ms|s|m|h)\b|\d+\s*(?:秒|分钟|小时)/g, '#');
+  }).join('|');
+  // Persist only a change detector, never process text or tool output.
+  let hash = 2166136261;
+  for (let i = 0; i < content.length; i++) hash = Math.imul(hash ^ content.charCodeAt(i), 16777619);
+  return `${turns.length}:${content.length}:${(hash >>> 0).toString(16)}`;
+}
+
 function isProModeLabel(value: string): boolean {
   const normalized = value.replace(/\s+/g, ' ').trim();
   return /^(?:pro|(?:gpt[- ]*)?[1-9]\d*(?:\.\d+)?\s*pro)$/i.test(normalized);
@@ -105,6 +123,7 @@ export function readSnapshot(documentId: string): PageSnapshot {
   const lastRole = last?.getAttribute('data-message-author-role');
   return {
     conversationKey: conversationKeyFromUrl(), url: location.href, documentId,
+    activityFingerprint: activityFingerprint(lastUser),
     visibility: document.visibilityState, focused: document.hasFocus(), wasDiscarded: Boolean((document as Document & { wasDiscarded?: boolean }).wasDiscarded),
     completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0}`,
     branchFingerprint, modeFingerprint: model.fingerprint, modeLabel: model.label, modeDetail: model.detail,

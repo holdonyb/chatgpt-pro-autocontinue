@@ -94,18 +94,24 @@ export async function executeSend(command: ContentCommand, current: PageSnapshot
   if (!el.isConnected || findComposerEditor() !== el || value(el).trim() !== command.prompt.trim() ||
       !button.isConnected || sendButton(el) !== button) return notSent('编辑器或发送按钮已变化，尚未点击发送。');
   if (!valid()) return notSent('等待期间发送指令已过期或扩展已重新加载，尚未点击发送。');
-  button.click();
-  const accepted = await waitFor(() => {
-    const after = readSnapshot(current.documentId);
-    if (after.conversationKey !== command.expectedConversationKey || after.modeFingerprint !== current.modeFingerprint || after.branchFingerprint !== current.branchFingerprint) return null;
-    const newUserId = after.lastUserTurnId !== current.lastUserTurnId ? after.lastUserTurnId : null;
-    if (after.busySignal) return { acceptedBy: 'busy' as const, userMessageId: newUserId };
-    if (after.lastUserTurnId && after.lastUserTurnId !== current.lastUserTurnId) return { acceptedBy: 'user-turn' as const, userMessageId: after.lastUserTurnId };
-    const afterEditor = findComposerEditor();
-    if (afterEditor && composerValue(afterEditor).trim() === '' && !sendButton(afterEditor)) {
-      return { acceptedBy: 'composer-cleared' as const, userMessageId: newUserId };
-    }
-    return null;
-  }, 5_000);
-  return accepted ? { ok: true, ...accepted } : { ok: false, clicked: true, reason: '已点击发送，但页面没有出现新的用户消息、回答状态或编辑器清空' };
+  const testId = button.getAttribute('data-testid') ?? '';
+  const clickEvidence = { target: 'send' as const, testId: ['send-button', 'composer-submit-button'].includes(testId) ? testId : 'other-send-control', type: button.type, at: Date.now() };
+  try {
+    button.click();
+    const accepted = await waitFor(() => {
+      const after = readSnapshot(current.documentId);
+      if (after.conversationKey !== command.expectedConversationKey || after.modeFingerprint !== current.modeFingerprint || after.branchFingerprint !== current.branchFingerprint) return null;
+      const newUserId = after.lastUserTurnId !== current.lastUserTurnId ? after.lastUserTurnId : null;
+      if (after.busySignal) return { acceptedBy: 'busy' as const, userMessageId: newUserId };
+      if (after.lastUserTurnId && after.lastUserTurnId !== current.lastUserTurnId) return { acceptedBy: 'user-turn' as const, userMessageId: after.lastUserTurnId };
+      const afterEditor = findComposerEditor();
+      if (afterEditor && composerValue(afterEditor).trim() === '' && !sendButton(afterEditor)) {
+        return { acceptedBy: 'composer-cleared' as const, userMessageId: newUserId };
+      }
+      return null;
+    }, 5_000);
+    return accepted ? { ok: true, ...accepted, clickEvidence } : { ok: false, clicked: true, clickEvidence, reason: '已点击发送，但页面没有出现新的用户消息、回答状态或编辑器清空' };
+  } catch {
+    return { ok: false, clicked: true, clickEvidence, reason: '发送点击或确认期间发生异常，结果未知，请核对页面。' };
+  }
 }
