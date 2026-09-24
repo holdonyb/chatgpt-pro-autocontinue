@@ -36,7 +36,7 @@ function publish(force = false, source = force ? 'stability-recheck' : 'page-cha
   const message: PageObservationRequest = { type: 'PAGE_OBSERVATION', snapshot: value, source };
   try { void chrome.runtime.sendMessage(message).catch(() => undefined); }
   catch { stopStaleScript(); }
-  if (!force && value.finalSignal && !value.busySignal) scheduleStabilityRecheck();
+  if (!force && (value.finalSignal || value.thinkingFailure) && !value.busySignal) scheduleStabilityRecheck();
 }
 
 chrome.runtime.onMessage.addListener((message: { type: string; command?: ContentCommand; delayMs?: number }, _sender, sendResponse) => {

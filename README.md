@@ -39,6 +39,10 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.14: continue after an explicit thinking failure
+
+The current assistant turn's visible “无法思考” heading is recognized as a failed attempt, not a completed answer. With an idle composer, verified Pro mode and stable turn identity, the extension sends the configured follow-up through its normal guarded send path. Each accepted follow-up counts against the original budget; the same failed turn is consumed once and ambiguous sends are never retried. After three consecutive failure follow-ups without a normal answer, the run pauses for review. Hidden, historical, quoted and nested tool labels do not authorize a send. A page-recovery pause still requires Resume after the page is readable; missing model evidence is never replaced with a cached model. Model diagnostics now include raw/excluded composer-control counts.
+
 ### v0.2.13: distinguish generation controls from research titles
 
 Research-card titles containing “Stop” or “停止” no longer mark the page as generating. Busy detection uses exact known stop-control IDs outside message/navigation content, or exact generation-stop labels in the composer; hidden controls are excluded. Streaming evidence is limited to assistant content after the latest user message. Diagnostics include matched stop-control and streaming-marker counts without storing titles. The inactivity refresh and completion-stability rules remain unchanged.

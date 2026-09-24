@@ -1,6 +1,6 @@
 import type { ContentCommand, PageObservationRequest, PageSnapshot, PauseReason, StartRequest, TaskRecord } from '../shared/types';
 import { canDispatch, shouldRefreshStaleBusy } from '../core/guards';
-import { hasIndependentCompletionEvidence, isStableCompletion } from '../core/completion';
+import { hasIndependentCompletionEvidence, isStableContinuation } from '../core/completion';
 import { createTask, reduceTask } from '../core/reducer';
 import { addLog, loadState, saveState } from './store';
 import { withTimeout } from '../shared/timeout';
@@ -235,18 +235,18 @@ export async function onObservation(message: PageObservationRequest, sender: Obs
   }
   const guard = canDispatch(task, message.snapshot, Date.now());
   if (guard.ok) {
-    await saveState(addLog(state, 'GUARD_PASSED', task, Date.now(), 'dispatch=true'));
+    await saveState(addLog(state, 'GUARD_PASSED', task, Date.now(), `dispatch=true cause=${message.snapshot.thinkingFailure ? 'thinking-failure' : 'answer-complete'}`));
     await dispatch(task, message.snapshot);
   }
   else if (guard.reason === 'MAX_SENDS_REACHED' && task.confirmedSends >= task.maxSends && message.snapshot.lastAssistantAnswerId && !task.consumedTurnIds.includes(message.snapshot.lastAssistantAnswerId)) {
-    const stable = isStableCompletion(message.snapshot, { answerId: message.snapshot.lastAssistantAnswerId, fingerprint: task.lastAnswerFingerprint, since: task.stableSince }, now);
+    const stable = isStableContinuation(message.snapshot, { answerId: message.snapshot.lastAssistantAnswerId, fingerprint: task.lastAnswerFingerprint, since: task.stableSince }, now);
     if (stable.complete) {
       task = reduceTask(task, { type: 'FINISH', reason: 'MAX_SENDS_REACHED', now });
       await saveState(addLog({ ...state, task }, 'MAX_SENDS_REACHED', task));
     }
   }
   else if (task.state !== 'PAUSED' && (guard.reason === 'ERROR_ON_PAGE' || guard.reason === 'MODE_CHANGED' || guard.reason === 'MODE_UNKNOWN' || guard.reason === 'CONVERSATION_CHANGED' || guard.reason === 'BRANCH_CHANGED' || guard.reason === 'USER_DRAFT' || guard.reason === 'TAB_UNAVAILABLE')) {
-    const detail = guard.reason === 'MODE_CHANGED' || guard.reason === 'MODE_UNKNOWN' ? `原模式：${short(task.modeFingerprint)}；当前识别：${message.snapshot.modeFingerprint ? short(message.snapshot.modeFingerprint) : '无法确认'}。请核对模型选择按钮后继续。` : undefined;
+    const detail = guard.reason === 'ERROR_ON_PAGE' && message.snapshot.thinkingFailure ? '已连续为“无法思考”续发 3 次，仍未得到正常回答，请检查目标页面。' : guard.reason === 'MODE_CHANGED' || guard.reason === 'MODE_UNKNOWN' ? `原模式：${short(task.modeFingerprint)}；当前识别：${message.snapshot.modeFingerprint ? short(message.snapshot.modeFingerprint) : '无法确认'}。请核对模型选择按钮后继续。` : undefined;
     task = reduceTask(task, { type: 'PAUSE', reason: guard.reason, detail, now: Date.now() });
     await saveState(addLog({ ...state, task }, 'PAUSE_GUARD', task));
   }

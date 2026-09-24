@@ -1,5 +1,6 @@
 import type { ContentCommand, PageSnapshot, SendExecutionResult } from '../shared/types';
 import { readSnapshot } from './chatgpt-adapter';
+import { hasContinuationEvidence } from '../core/completion';
 import { composerValue, findComposerEditor, type ComposerEditor } from './composer';
 
 function value(el: ComposerEditor): string { return composerValue(el); }
@@ -74,7 +75,7 @@ export async function executeSend(command: ContentCommand, current: PageSnapshot
   if (current.documentId !== command.expectedDocumentId || current.conversationKey !== command.expectedConversationKey) return notSent('页面身份已变化');
   if (current.lastAssistantAnswerId !== command.expectedParentTurnId) return notSent('回答父轮次已变化');
   if (!current.editorEmpty || current.hasPendingAttachment) return notSent('检测到用户草稿或附件');
-  if (current.status !== 'READY' || current.busySignal || !current.finalSignal) return notSent('页面尚未达到可发送状态');
+  if (!hasContinuationEvidence(current)) return notSent('页面尚未达到可发送状态');
   const el = findComposerEditor();
   if (!el) return notSent('未找到编辑器');
   setValue(el, command.prompt);
@@ -88,7 +89,7 @@ export async function executeSend(command: ContentCommand, current: PageSnapshot
   const fresh = readSnapshot(current.documentId);
   if (fresh.conversationKey !== command.expectedConversationKey || fresh.lastAssistantAnswerId !== command.expectedParentTurnId ||
       fresh.modeFingerprint !== current.modeFingerprint || fresh.branchFingerprint !== current.branchFingerprint ||
-      fresh.busySignal || fresh.errorSignal || fresh.hasPendingAttachment || !fresh.finalSignal || fresh.status !== 'READY') {
+      fresh.busySignal || fresh.errorSignal || fresh.hasPendingAttachment || !hasContinuationEvidence(fresh)) {
     return notSent('等待发送按钮期间页面状态变化，尚未点击发送。');
   }
   if (!el.isConnected || findComposerEditor() !== el || value(el).trim() !== command.prompt.trim() ||

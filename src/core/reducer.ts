@@ -33,7 +33,8 @@ export function reduceTask(task: TaskRecord, event: TaskEvent): TaskRecord {
   if (event.type === 'SEND_CONFIRMED') {
     const pending = task.pendingAttempt;
     const consumed = pending ? [...task.consumedTurnIds, pending.sourceAnswerId] : task.consumedTurnIds;
-    return { ...bump(task), state: 'WAITING_ANSWER', pauseReason: 'NONE', pendingAttempt: null, confirmedSends: task.confirmedSends + 1, consumedTurnIds: consumed, lastCompletedTurnId: event.userMessageId, nextEligibleAt: event.now + 15_000, lastProgressAt: event.now };
+    const consecutiveThinkingFailures = pending?.sourceAnswerId.startsWith('thinking-failure:') ? (task.consecutiveThinkingFailures ?? 0) + 1 : 0;
+    return { ...bump(task), consecutiveThinkingFailures, state: 'WAITING_ANSWER', pauseReason: 'NONE', pendingAttempt: null, confirmedSends: task.confirmedSends + 1, consumedTurnIds: consumed, lastCompletedTurnId: event.userMessageId, nextEligibleAt: event.now + 15_000, lastProgressAt: event.now };
   }
   if (event.type === 'CONTROLLED_RELOAD_STARTED') return { ...bump(task), controlledReloadAt: event.now };
   if (event.type === 'DOCUMENT_REBOUND') return { ...bump(task), boundDocumentId: event.documentId, controlledReloadAt: null, identityWaitSince: null, stableSince: event.now, lastProgressAt: event.now, lastObservationAt: event.now };

@@ -58,6 +58,44 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('background observation ownership', () => {
+  it('resumes a recovered document with explicit thinking failure, sends once and preserves the budget', async () => {
+    const saved = await loadState();
+    saved.task!.state = 'PAUSED';
+    saved.task!.pauseReason = 'PAGE_RECOVERY_FAILED';
+    const deadline = saved.task!.deadlineAt;
+    await saveState(saved);
+    currentPage = snapshot({documentId:'d2',thinkingFailure:true,finalSignal:false,lastAssistantAnswerId:'thinking-failure:u2:f1',answerFingerprint:'thinking-failure:u2:f1'});
+    const {control,checkAlarm}=await import('../../src/background/coordinator');
+    await control('RESUME');
+    expect(sends()).toHaveLength(0);
+    expect((await loadState()).task?.boundDocumentId).toBe('d2');
+    vi.setSystemTime(Date.now()+11000);
+    await checkAlarm();
+    expect(sends()).toHaveLength(1);
+    const task=(await loadState()).task!;
+    expect(task.confirmedSends).toBe(3);
+    expect(task.consecutiveThinkingFailures).toBe(1);
+    expect(task.consumedTurnIds).toContain('thinking-failure:u2:f1');
+    expect(task.deadlineAt).toBe(deadline);
+    vi.setSystemTime(Date.now()+60000);
+    await checkAlarm();
+    expect(sends()).toHaveLength(1);
+  });
+  it('keeps a failure-triggered send uncertain when confirmation is lost', async () => {
+    const failure=snapshot({thinkingFailure:true,finalSignal:false,lastAssistantAnswerId:'thinking-failure:u2:f1',answerFingerprint:'thinking-failure:u2:f1'});
+    await observe(failure);
+    vi.setSystemTime(Date.now()+11000);
+    sendMessage.mockResolvedValueOnce({ok:false,clicked:true,reason:'lost acknowledgement'});
+    await observe(failure);
+    expect(sends()).toHaveLength(1);
+    const saved=await loadState();
+    expect(saved.task?.pauseReason).toBe('SEND_UNCERTAIN');
+    expect(saved.task?.confirmedSends).toBe(2);
+    const {checkAlarm}=await import('../../src/background/coordinator');
+    vi.setSystemTime(Date.now()+60000);
+    await checkAlarm();
+    expect(sends()).toHaveLength(1);
+  });
   it('preserves the first uncertain-send diagnostic across repeated alarms', async () => {
     sendMessage.mockResolvedValueOnce({ ok: false, reason: 'original failure' });
     await observe();

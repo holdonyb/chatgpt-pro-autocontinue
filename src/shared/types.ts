@@ -34,6 +34,7 @@ export type PauseReason =
 export type PageStatus = 'READY' | 'BUSY' | 'UNKNOWN' | 'ERROR';
 
 export interface PageSnapshot {
+  thinkingFailure?: boolean;
   activityFingerprint?: string | null;
   modeDetail?: string;
   visibility?: string;
@@ -72,6 +73,7 @@ export interface PendingAttempt {
 }
 
 export interface TaskRecord {
+  consecutiveThinkingFailures?: number;
   lastActivityFingerprint?: string | null;
   lastBusySignal?: boolean;
   schemaVersion: 1;

@@ -55,7 +55,7 @@ async function refreshOnce(): Promise<void> {
   if (task?.state === 'WAITING_ANSWER' && pageSnapshot?.conversationKey === task.conversationKey) {
     const currentAnswer = pageSnapshot.lastMessageRole === 'assistant' && pageSnapshot.finalSignal && !task.consumedTurnIds?.includes(pageSnapshot.lastAssistantAnswerId);
     const refreshMinutes = (task.staleRefreshMs ?? 15 * 60_000) / 60_000;
-    $('reason').textContent = pageSnapshot.busySignal ? `ChatGPT 显示生成中；过程或答案持续 ${refreshMinutes} 分钟无新进展时，会自动刷新核对。` : currentAnswer ? '回答已完成，等待约 10–30 秒进行稳定确认。' : `尚未确认本轮回答完成；持续 ${refreshMinutes} 分钟无新进展时，会自动刷新核对。`;
+    $('reason').textContent = pageSnapshot.busySignal ? `ChatGPT 显示生成中；过程或答案持续 ${refreshMinutes} 分钟无新进展时，会自动刷新核对。` : pageSnapshot.thinkingFailure ? '本轮显示“无法思考”；确认页面稳定后将发送续研指令，计入发送次数。' : currentAnswer ? '回答已完成，等待约 10–30 秒进行稳定确认。' : `尚未确认本轮回答完成；持续 ${refreshMinutes} 分钟无新进展时，会自动刷新核对。`;
   }
   if (task?.state === 'WAITING_ANSWER' && task.controlledReloadAt != null) $('reason').textContent = '正在刷新并重新确认目标页面，发送计数保持不变。';
   else if (task?.state === 'WAITING_ANSWER' && task.failedPageChecks) $('reason').textContent = `目标页面暂未回应，正在重试检查（${task.failedPageChecks}/3）。`;

@@ -5,6 +5,15 @@ import type { PageSnapshot } from '../../src/shared/types';
 const base = (answer = 'a1'): PageSnapshot => ({ conversationKey: 'c1', url: 'https://chatgpt.com/c/c1', documentId: 'd1', branchFingerprint: 'b1', modeFingerprint: 'pro', modeLabel: 'Pro', status: 'READY', lastMessageRole: 'assistant', lastUserTurnId: 'u1', lastAssistantAnswerId: answer, answerFingerprint: `${answer}:10:end`, finalSignal: true, busySignal: false, errorSignal: false, editorEmpty: true, hasPendingAttachment: false, observedAt: 0 });
 
 describe('task reducer', () => {
+  it('counts consecutive thinking-failure follow-ups only on confirmation and resets after a normal answer', () => {
+    let task=createTask({conversationKey:'c1',branchFingerprint:'b1',tabId:2,documentId:'d1',modeFingerprint:'pro',prompt:'继续',maxSends:20,hours:8,now:0});
+    for (const source of ['thinking-failure:u1:f1','thinking-failure:u2:f2','a3']) {
+      task=reduceTask(task,{type:'ATTEMPT_COMMITTED',now:1,attempt:{attemptId:source,sourceAnswerId:source,expectedParentTurnId:source,previousUserTurnId:'u1',promptDigest:'x',phase:'DISPATCH_COMMITTED',createdAt:1,confirmedUserMessageId:null}});
+      task=reduceTask(task,{type:'SEND_CONFIRMED',userMessageId:'u2',now:2});
+      expect(task.consecutiveThinkingFailures).toBe(source==='a3'?0:source.includes('f1')?1:2);
+    }
+    expect(task.confirmedSends).toBe(3);
+  });
   it('preserves budget and records a confirmed send', () => {
     const task = createTask({ conversationKey: 'c1', branchFingerprint: 'b1', tabId: 2, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 2, hours: 8, now: 0 });
     const committed = reduceTask(task, { type: 'ATTEMPT_COMMITTED', now: 10, attempt: { attemptId: 'x', sourceAnswerId: 'a1', expectedParentTurnId: 'a1', previousUserTurnId: 'u1', promptDigest: '2:继续', phase: 'DISPATCH_COMMITTED', createdAt: 10, confirmedUserMessageId: null } });

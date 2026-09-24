@@ -81,6 +81,22 @@ function activityFingerprint(lastUser: Element | null): string | null {
   return `${turns.length}:${content.length}:${(hash >>> 0).toString(16)}`;
 }
 
+function thinkingFailureId(lastUser: Element | null, editor: Element | null, busy: boolean): string | null {
+  if (!lastUser || !editor || !isVisible(editor) || busy) return null;
+  const turn = Array.from(document.querySelectorAll('[data-testid^="conversation-turn"][data-turn="assistant"]')).at(-1);
+  if (!turn || !isVisible(turn) || !(lastUser.compareDocumentPosition(turn) & Node.DOCUMENT_POSITION_FOLLOWING)) return null;
+  const id = turn.getAttribute('data-turn-id');
+  const userId = messageId(lastUser);
+  if (!id || !userId || turn.querySelector('[data-message-author-role="assistant"]')) return null;
+  // The failure heading lives outside message bodies. Never interpret research
+  // prose, a tool-card label, or a historical failure as a recovery instruction.
+  const node = turn.querySelector('button[aria-expanded]');
+  const failed = node &&
+    !node.closest('[data-message-author-role], [data-message-id]') &&
+    !node.hasAttribute('aria-label') && isVisible(node) && text(node) === '无法思考';
+  return failed ? `thinking-failure:${userId}:${id}` : null;
+}
+
 function isProModeLabel(value: string): boolean {
   const normalized = value.replace(/\s+/g, ' ').trim();
   return /^(?:pro|(?:gpt[- ]*)?[1-9]\d*(?:\.\d+)?\s*pro)$/i.test(normalized);
@@ -113,14 +129,15 @@ function eligibleModelControl(node: Element): boolean {
 }
 
 function mode(): { label: string | null; fingerprint: string | null; detail: string } {
-  const composer = Array.from(document.querySelectorAll(MODEL_SELECTORS[0])).filter(eligibleModelControl);
+  const rawComposer = Array.from(document.querySelectorAll(MODEL_SELECTORS[0]));
+  const composer = rawComposer.filter(eligibleModelControl);
   const explicit = composer.length ? composer : Array.from(document.querySelectorAll(MODEL_SELECTORS.slice(1).join(','))).filter(eligibleModelControl);
   // A real selector whose value is unreadable/non-Pro blocks fallback to a badge.
   const candidates = explicit.length ? explicit : Array.from(document.querySelectorAll('button, [role="button"]'))
     .filter(eligibleModelControl).filter(node => proModeLabel(node) !== null);
   const labels = candidates.map(proModeLabel);
   const fingerprints = new Set(labels.filter((label): label is string => label !== null).map(label => label.toLowerCase().replace(/\s+/g, ' ')));
-  const detail = `source=${explicit.length ? 'model-control' : 'exact-button'} scope=${composer.length ? 'composer' : 'page-controls'} candidates=${candidates.length} distinct=${fingerprints.size} unreadable=${labels.some(label => label === null)}`;
+  const detail = `source=${explicit.length ? 'model-control' : 'exact-button'} scope=${composer.length ? 'composer' : 'page-controls'} candidates=${candidates.length} distinct=${fingerprints.size} unreadable=${labels.some(label => label === null)} rawComposer=${rawComposer.length} excludedComposer=${rawComposer.length - composer.length}`;
   if (labels.some(label => label === null) || fingerprints.size !== 1) return { label: null, fingerprint: null, detail };
   return { label: labels[0], fingerprint: [...fingerprints][0], detail };
 }
@@ -132,12 +149,13 @@ export function readSnapshot(documentId: string): PageSnapshot {
   const assistantMessages = all.filter((n) => n.getAttribute('data-message-author-role') === 'assistant');
   const lastUser = userMessages.at(-1) ?? null;
   const lastAssistant = assistantMessages.at(-1) ?? null;
-  const lastAssistantId = lastAssistant ? messageId(lastAssistant) : null;
+  let lastAssistantId = lastAssistant ? messageId(lastAssistant) : null;
   const answerText = text(lastAssistant);
   const answerRawText = rawText(lastAssistant);
   const editor = findComposerEditor();
   const generation = generationEvidence(lastUser, lastAssistant, editor);
   const busySignal = generation.busy;
+  const failureId = thinkingFailureId(lastUser, editor, busySignal);
   const errorSignal = Boolean(document.querySelector('[role="alert"], [data-testid*="error" i]')) &&
     /error|错误|try again|重试/i.test(text(document.querySelector('[role="alert"], [data-testid*="error" i]')));
   // This is only a candidate until DOM_OBSERVATIONS records the live page's completion marker.
@@ -146,7 +164,8 @@ export function readSnapshot(documentId: string): PageSnapshot {
   const actionEvidence = Boolean(assistantTurn?.querySelector(
     '[data-testid*="copy" i], button[aria-label*="Copy" i], button[aria-label*="复制"], button[title*="Copy" i], button[title*="复制"], [data-testid*="regenerate" i], button[aria-label*="重新生成"]'
   ));
-  const finalSignal = Boolean(last === lastAssistant && lastAssistantId && answerText && !busySignal && (explicitComplete || actionEvidence));
+  const finalSignal = Boolean(!failureId && last === lastAssistant && lastAssistantId && answerText && !busySignal && (explicitComplete || actionEvidence));
+  if (failureId) lastAssistantId = failureId;
   const model = mode();
   const branchNode = document.querySelector('[data-conversation-branch-id], [data-branch-id]');
   // Message count changes after every send, so it is not a branch identity.
@@ -160,14 +179,14 @@ export function readSnapshot(documentId: string): PageSnapshot {
     conversationKey: conversationKeyFromUrl(), url: location.href, documentId,
     activityFingerprint: activityFingerprint(lastUser),
     visibility: document.visibilityState, focused: document.hasFocus(), wasDiscarded: Boolean((document as Document & { wasDiscarded?: boolean }).wasDiscarded),
-    completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0} stopControls=${generation.stopControls} streaming=${generation.streaming}`,
+    completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0} stopControls=${generation.stopControls} streaming=${generation.streaming} thinkingFailure=${Boolean(failureId)} editor=${Boolean(editor)}`,
     branchFingerprint, modeFingerprint: model.fingerprint, modeLabel: model.label, modeDetail: model.detail,
     status: errorSignal ? 'ERROR' : busySignal ? 'BUSY' : model.fingerprint ? 'READY' : 'UNKNOWN',
-    lastMessageRole: lastRole === 'user' || lastRole === 'assistant' ? lastRole : 'unknown',
+    lastMessageRole: failureId ? 'assistant' : lastRole === 'user' || lastRole === 'assistant' ? lastRole : 'unknown',
     lastUserTurnId: lastUser ? messageId(lastUser) : null, lastAssistantAnswerId: lastAssistantId,
-    answerFingerprint: lastAssistantId && answerText ? `${lastAssistantId}:${answerText.length}:${answerText.slice(-160)}` : null,
+    answerFingerprint: failureId ?? (lastAssistantId && answerText ? `${lastAssistantId}:${answerText.length}:${answerText.slice(-160)}` : null),
     terminalMarker: !finalSignal ? null : hasTerminalMarker(answerRawText, 'DONE') ? 'DONE' : hasTerminalMarker(answerRawText, 'NEEDS_USER') ? 'NEEDS_USER' : null,
-    finalSignal, busySignal, errorSignal, editorEmpty: editorValue.trim().length === 0,
+    thinkingFailure: Boolean(failureId), finalSignal, busySignal, errorSignal, editorEmpty: editorValue.trim().length === 0,
     hasPendingAttachment, observedAt: Date.now()
   };
 }

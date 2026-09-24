@@ -1,12 +1,12 @@
 import type { PageSnapshot, PauseReason, TaskRecord } from '../shared/types';
-import { hasIndependentCompletionEvidence, isStableCompletion } from './completion';
+import { hasContinuationEvidence, isStableContinuation } from './completion';
 
 export type DispatchGuardResult = { ok: true } | { ok: false; reason: PauseReason };
 
 export function shouldRefreshStaleBusy(task: TaskRecord, snapshot: PageSnapshot, now: number): boolean {
   const awaitedUser = Boolean(task.lastCompletedTurnId) && (snapshot.lastUserTurnId === task.lastCompletedTurnId || task.lastCompletedTurnId!.startsWith('accepted:'));
   const awaitingSubmittedAnswer = awaitedUser &&
-    (!hasIndependentCompletionEvidence(snapshot) || !snapshot.lastAssistantAnswerId || task.consumedTurnIds.includes(snapshot.lastAssistantAnswerId));
+    (!hasContinuationEvidence(snapshot) || !snapshot.lastAssistantAnswerId || task.consumedTurnIds.includes(snapshot.lastAssistantAnswerId));
   return task.state === 'WAITING_ANSWER' && !task.pendingAttempt && !task.controlledReloadAt &&
     snapshot.documentId === task.boundDocumentId && snapshot.conversationKey === task.conversationKey &&
     snapshot.branchFingerprint === task.branchFingerprint && snapshot.modeFingerprint === task.modeFingerprint &&
@@ -30,8 +30,9 @@ export function canDispatch(task: TaskRecord, snapshot: PageSnapshot, now: numbe
   // evidence of a new user draft.
   if (task.nextEligibleAt > now) return { ok: false, reason: 'COMPLETION_UNKNOWN' };
   if (snapshot.editorEmpty === false || snapshot.hasPendingAttachment) return { ok: false, reason: 'USER_DRAFT' };
-  if (!hasIndependentCompletionEvidence(snapshot)) return { ok: false, reason: 'ANSWER_NOT_COMPLETE' };
-  const stable = isStableCompletion(snapshot, {
+  if (!hasContinuationEvidence(snapshot)) return { ok: false, reason: 'ANSWER_NOT_COMPLETE' };
+  if (snapshot.thinkingFailure && (task.consecutiveThinkingFailures ?? 0) >= 3) return { ok: false, reason: 'ERROR_ON_PAGE' };
+  const stable = isStableContinuation(snapshot, {
     answerId: task.lastAnswerFingerprint ? snapshot.lastAssistantAnswerId : null,
     fingerprint: task.lastAnswerFingerprint,
     since: task.stableSince
