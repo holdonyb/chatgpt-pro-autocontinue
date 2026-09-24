@@ -40,7 +40,11 @@ function publish(force = false, source = force ? 'stability-recheck' : 'page-cha
 }
 
 chrome.runtime.onMessage.addListener((message: { type: string; command?: ContentCommand; delayMs?: number }, _sender, sendResponse) => {
-  if (message.type === 'GET_SNAPSHOT') { sendResponse(snapshot()); return false; }
+  if (message.type === 'GET_SNAPSHOT') {
+    try { sendResponse(snapshot()); }
+    catch { sendResponse({ ok: false, errorCode: 'SNAPSHOT_EXCEPTION' }); }
+    return false;
+  }
   if (message.type === 'GET_HEALTH') { sendResponse(adapterHealth()); return false; }
   if (message.type === 'SCHEDULE_STABILITY_RECHECK') {
     const delay = typeof message.delayMs === 'number' ? message.delayMs : 10_500;

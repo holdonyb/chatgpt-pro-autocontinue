@@ -588,6 +588,50 @@ describe('bounded recovery', () => {
     }
     expect((await loadState()).task?.confirmedSends).toBe(2);
     expect((await loadState()).task?.statusDetail).toContain('3');
+    expect((await loadState()).logs.find(log => log.event === 'PAGE_CHECK_FAILED')?.detail).toContain('cause=timeout elapsedMs=5000');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it.each([
+    ['Could not establish connection. Receiving end does not exist.', 'receiver-missing'],
+    ['The message port closed before a response was received.', 'channel-closed'],
+    ['Extension context invalidated.', 'context-invalidated'],
+    ['No tab with id: 7.', 'tab-missing'],
+    ['private page content should never be persisted', 'transport-error']
+  ])('classifies failed page messages without retaining raw error text: %s', async (message, cause) => {
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    sendMessage.mockRejectedValueOnce(new Error(message));
+    chrome.tabs.get = vi.fn(async () => ({ id: 7, active: false, frozen: true, discarded: false, status: 'complete', url: 'https://chatgpt.com/c/c1?private=secret' } as unknown as chrome.tabs.Tab));
+    await checkAlarm();
+    const detail = (await loadState()).logs.at(-1)?.detail;
+    expect(detail).toContain(`cause=${cause}`);
+    expect(detail).toContain('frozen=true discarded=false active=false tabStatus=complete');
+    expect(detail).not.toContain(message);
+    expect(detail).not.toContain('secret');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it('treats a caught DOM snapshot exception as a read failure rather than a page snapshot', async () => {
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    sendMessage.mockResolvedValueOnce({ ok: false, errorCode: 'SNAPSHOT_EXCEPTION' });
+    await checkAlarm();
+    const state = await loadState();
+    expect(state.task?.failedPageChecks).toBe(1);
+    expect(state.task?.state).toBe('WAITING_ANSWER');
+    expect(state.logs.at(-1)?.detail).toContain('cause=snapshot-exception');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it('bounds failure diagnostics when browser-owned tab metadata is also unavailable', async () => {
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    sendMessage.mockRejectedValueOnce(new Error('The message port closed before a response was received.'));
+    chrome.tabs.get = vi.fn(() => new Promise<chrome.tabs.Tab>(() => undefined));
+    const check = checkAlarm();
+    await vi.advanceTimersByTimeAsync(2_001);
+    await check;
+    const state = await loadState();
+    expect(state.logs.at(-1)?.detail).toContain('tabProbe=unavailable');
+    expect(state.task?.failedPageChecks).toBe(1);
     expect(sends()).toHaveLength(0);
   });
 

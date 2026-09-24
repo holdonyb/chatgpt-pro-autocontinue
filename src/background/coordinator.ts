@@ -4,6 +4,7 @@ import { hasIndependentCompletionEvidence, isStableCompletion } from '../core/co
 import { createTask, reduceTask } from '../core/reducer';
 import { addLog, loadState, saveState } from './store';
 import { withTimeout } from '../shared/timeout';
+import { failedTabDetail, probeSnapshot } from './page-probe';
 
 export const STABILITY_ALARM_PREFIX = 'chatgpt-pro-autocontinue/stability/';
 
@@ -41,7 +42,7 @@ async function pauseRecovery(task: TaskRecord, page: PageSnapshot | null): Promi
 }
 
 async function observeTab(tabId: number): Promise<PageSnapshot | null> {
-  try { return await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'GET_SNAPSHOT' }, { frameId: 0 }), 5_000, '目标页面 5 秒内未回应'); } catch { return null; }
+  return (await probeSnapshot(tabId)).snapshot;
 }
 
 export async function start(tabId: number, request: StartRequest): Promise<{ ok: boolean; state?: TaskRecord; error?: string }> {
@@ -271,12 +272,14 @@ export async function checkAlarm(source = 'periodic'): Promise<void> {
     state.logs = addLog(state, 'RECOVERY_FINAL_CHECK', state.task, Date.now(), 'reason=identity-timeout').logs;
     await saveState(state);
   }
-  const snapshot = await observeTab(state.task.boundTabId);
+  const pageRead = await probeSnapshot(state.task.boundTabId);
+  const snapshot = pageRead.snapshot;
   if (!snapshot) {
     if (state.task.pendingAttempt) { await control('PAUSE', 'SEND_UNCERTAIN', '页面无法连接，上次发送结果未知；请核对页面。'); return; }
     const failures = (state.task.failedPageChecks ?? 0) + 1;
     state.task = { ...state.task, failedPageChecks: failures };
-    await saveState(addLog(state, 'PAGE_CHECK_FAILED', state.task, Date.now(), `consecutive=${failures}/3`));
+    const tabDetail = await failedTabDetail(state.task.boundTabId);
+    await saveState(addLog(state, 'PAGE_CHECK_FAILED', state.task, Date.now(), `consecutive=${failures}/3 ${pageRead.detail} ${tabDetail}`));
     if (recoveryExpired(state.task)) await pauseRecovery(state.task, null);
     else if (failures >= 3) await control('PAUSE', 'TAB_UNAVAILABLE', '连续 3 次无法读取目标页面。请打开原标签页、确认登录并刷新，再点击继续；原计数和时限保留。');
     return;

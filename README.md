@@ -39,6 +39,12 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.12: distinguish page-read failures
+
+Read failures now record a normalized cause (timeout, missing receiver, closed channel, invalid extension context, missing tab, snapshot exception or invalid reply) and elapsed time. A separate browser-owned tab query records frozen/discarded/active/loading state when available, even if the page script does not reply. Raw exception text and URLs are not logged. This diagnoses loss of communication; it does not automatically imply a network failure or stopped ChatGPT response.
+
+After reloading the extension, also refresh the target ChatGPT page to replace its content script, then Resume. Automatic recovery thresholds and send deduplication are unchanged.
+
 ### v0.2.11: recover a stuck generation indicator
 
 Automatic refresh remains available while the page displays generation, once the configured inactivity threshold is reached. This supersedes v0.2.10's blanket busy-page exclusion. Current-turn process progress and final-answer changes reset the timer; a fresh pre-reload probe cancels recovery if progress or generation state changed. Identity checks, draft protection, the three-refresh allowance per awaited turn, and uncertain-send deduplication remain in force. Logs distinguish `cause=busy-no-progress` from `cause=awaiting-submitted-answer`. Refresh itself never counts as completion and does not send a follow-up.
