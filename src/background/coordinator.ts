@@ -94,13 +94,16 @@ export async function control(type: 'PAUSE' | 'RESUME' | 'STOP', pauseReason: Pa
   }
   if (type === 'RESUME' && state.task.state !== 'PAUSED') return state.task;
   if (type === 'PAUSE' && ['PAUSED', 'STOPPED', 'FINISHED'].includes(state.task.state)) return state.task;
-  if (type === 'RESUME' && state.task.pauseReason === 'MODE_CHANGED' && state.task.modeFingerprint === 'pro' && now < state.task.deadlineAt) {
+  if (type === 'RESUME' && ['MODE_CHANGED', 'MODE_UNKNOWN', 'PAGE_RECOVERY_FAILED'].includes(state.task.pauseReason) && now < state.task.deadlineAt) {
     const page = await observeTab(state.task.boundTabId);
+    const specificPro = (mode: string) => /^(?:gpt[- ]*)?[1-9]\d*(?:\.\d+)? pro$/.test(mode);
+    const labelRefinement = page?.modeFingerprint && ((state.task.modeFingerprint === 'pro' && specificPro(page.modeFingerprint)) ||
+      (page.modeFingerprint === 'pro' && specificPro(state.task.modeFingerprint)));
     if (page?.conversationKey === state.task.conversationKey && page.branchFingerprint === state.task.branchFingerprint &&
         page.editorEmpty && !page.hasPendingAttachment && !page.errorSignal && page.status !== 'UNKNOWN' &&
-        /^(?:gpt[- ]*)?[1-9]\d*(?:\.\d+)? pro$/.test(page.modeFingerprint ?? '')) {
+        labelRefinement) {
       const rebound = { ...state.task, modeFingerprint: page.modeFingerprint!, revision: state.task.revision + 1 };
-      state = addLog({ ...state, task: rebound }, 'LEGACY_MODE_REBOUND', rebound, Date.now(), `source=manual-resume expected=pro observed=${short(page.modeFingerprint)}`);
+      state = addLog({ ...state, task: rebound }, 'LEGACY_MODE_REBOUND', rebound, Date.now(), `source=manual-resume expected=${short(state.task.modeFingerprint)} observed=${short(page.modeFingerprint)}`);
     }
   }
   const event = type === 'PAUSE' ? { type: 'PAUSE' as const, reason: pauseReason, detail, now } : type === 'RESUME' ? { type: 'RESUME' as const, now } : { type: 'STOP' as const, now };

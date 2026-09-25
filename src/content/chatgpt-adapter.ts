@@ -2,9 +2,10 @@ import type { PageSnapshot } from '../shared/types';
 import { hasTerminalMarker } from '../core/completion';
 import { composerValue, findComposerEditor } from './composer';
 
-const MESSAGE_SELECTORS = '[data-message-author-role], [data-message-id]';
+const NEW_MESSAGE = '[data-chatgpt-search-unit-key][data-chatgpt-search-message-ids]';
+const MESSAGE_SELECTORS = `[data-message-author-role], [data-message-id], ${NEW_MESSAGE}`;
 const MODEL_SELECTORS = [
-  'form[data-type="unified-composer"] [data-composer-transition-slot="trailing"] button[aria-haspopup="menu"]',
+  'form[data-type="unified-composer"] [data-composer-transition-slot="trailing"] button[aria-haspopup="menu"], form[data-chatgpt-composer] button[data-codex-intelligence-trigger="true"][aria-haspopup="menu"]',
   '[data-testid*="model"]', '[data-testid*="Model"]',
   'button[aria-label*="model" i]', 'button[aria-label*="模型"]'
 ];
@@ -23,11 +24,38 @@ export function conversationKeyFromUrl(url = location.href): string | null {
 }
 
 function messageId(node: Element): string | null {
+  if (node.matches(NEW_MESSAGE)) {
+    const ids = [...new Set((node.getAttribute('data-chatgpt-search-message-ids') ?? '').trim().split(/\s+/).filter(Boolean))];
+    return ids.length === 1 ? ids[0] : null;
+  }
   return node.getAttribute('data-message-id') || node.getAttribute('data-id') ||
     (node.id && /message/i.test(node.id) ? node.id : null);
 }
 
-function messages(): Element[] { return Array.from(document.querySelectorAll(MESSAGE_SELECTORS)).filter((n) => messageId(n)); }
+function messageRole(node: Element | null): string | null {
+  if (!node) return null;
+  const key = node.getAttribute('data-chatgpt-search-unit-key');
+  return node.getAttribute('data-message-author-role') || (key?.endsWith(':user') ? 'user' : key?.endsWith(':assistant') ? 'assistant' : null);
+}
+
+function messages(): Element[] { return Array.from(document.querySelectorAll(MESSAGE_SELECTORS)).filter(n => n.matches(NEW_MESSAGE) || messageId(n)); }
+
+function controlText(node: Element): string {
+  // Read text nodes from the live DOM so CSS-hidden measurement labels are not
+  // accidentally revived by cloning them into a detached tree.
+  function collect(current: Node): string {
+    if (current.nodeType === Node.TEXT_NODE) return current.textContent ?? '';
+    if (!(current instanceof Element) || current.matches('script, style, svg') || !isVisible(current)) return '';
+    return Array.from(current.childNodes).map(collect).join('');
+  }
+  return collect(node).replace(/\s+/g, ' ').trim();
+}
+
+function controlLabel(node: Element): string {
+  const ids = node.getAttribute('aria-labelledby')?.trim().split(/\s+/) ?? [];
+  if (ids.length) return ids.map(id => document.getElementById(id)).filter((el): el is HTMLElement => Boolean(el && isVisible(el))).map(controlText).join(' ').trim();
+  return node.getAttribute('aria-label')?.trim() || controlText(node);
+}
 
 function isVisible(node: Element): boolean {
   for (let parent: Element | null = node; parent; parent = parent.parentElement) {
@@ -46,7 +74,7 @@ function generationEvidence(lastUser: Element | null, lastAssistant: Element | n
   ]);
   const stopControls = Array.from(candidates).filter(node => {
     // Research titles can contain "Stop" or "停止"; never read them as controls.
-    if (node.closest('[data-message-author-role], [data-testid^="conversation-turn"], article, nav, aside, [role="menu"], [role="dialog"]') || !isVisible(node)) return false;
+    if (node.closest('[data-message-author-role], [data-testid^="conversation-turn"], [data-turn-key], article, nav, aside, [role="menu"], [role="dialog"]') || !isVisible(node)) return false;
     const label = node.getAttribute('aria-label')?.replace(/\s+/g, ' ').trim() ?? '';
     if (/record|voice|audio|录音|语音|听写/i.test(label)) return false;
     return ['stop-button', 'composer-stop-button'].includes(node.getAttribute('data-testid') ?? '') ||
@@ -54,7 +82,7 @@ function generationEvidence(lastUser: Element | null, lastAssistant: Element | n
   });
   const streaming = Array.from(document.querySelectorAll('[data-is-streaming="true"]')).filter(node => {
     if (!isVisible(node)) return false;
-    const assistantScope = node.closest('[data-message-author-role="assistant"], [data-turn="assistant"]') ||
+    const assistantScope = node.closest('[data-message-author-role="assistant"], [data-turn="assistant"], [data-chatgpt-search-unit-key$=":assistant"]') ||
       (lastAssistant && node.contains(lastAssistant));
     if (!assistantScope) return false;
     return lastUser ? Boolean(lastUser.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) :
@@ -69,6 +97,8 @@ function activityFingerprint(lastUser: Element | null): string | null {
   // inspect assistant turns following the latest user; historical UI is irrelevant.
   const turns = Array.from(document.querySelectorAll('[data-testid^="conversation-turn"][data-turn="assistant"]'))
     .filter(node => Boolean(lastUser.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const pair = lastUser.closest('[data-turn-key]');
+  if (pair) turns.push(...Array.from(pair.querySelectorAll('[data-chatgpt-agent-turn-start]')).map(node => node.parentElement!).filter(node => Boolean(lastUser.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)));
   if (!turns.length) return null;
   const content = turns.map(node => {
     const copy = node.cloneNode(true) as Element;
@@ -83,6 +113,16 @@ function activityFingerprint(lastUser: Element | null): string | null {
 
 function thinkingFailureId(lastUser: Element | null, editor: Element | null, busy: boolean): string | null {
   if (!lastUser || !editor || !isVisible(editor) || busy) return null;
+  const pair = lastUser.closest('[data-turn-key]');
+  if (pair) {
+    if (pair !== Array.from(document.querySelectorAll('[data-turn-key]')).at(-1) || pair.getAttribute('data-turn-key') !== messageId(lastUser)) return null;
+    if (pair.querySelector('[data-chatgpt-search-unit-key$=":assistant"]')) return null;
+    const marker = pair.querySelector('[data-chatgpt-agent-turn-start]');
+    if (!marker || !(lastUser.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING)) return null;
+    const heading = marker.parentElement?.querySelector('button[aria-expanded][aria-labelledby]');
+    if (!heading || heading.closest(NEW_MESSAGE) || !isVisible(heading) || controlLabel(heading) !== '无法思考') return null;
+    return `thinking-failure:${messageId(lastUser)}:${pair.getAttribute('data-turn-key')}`;
+  }
   const turn = Array.from(document.querySelectorAll('[data-testid^="conversation-turn"][data-turn="assistant"]')).at(-1);
   if (!turn || !isVisible(turn) || !(lastUser.compareDocumentPosition(turn) & Node.DOCUMENT_POSITION_FOLLOWING)) return null;
   const id = turn.getAttribute('data-turn-id');
@@ -103,7 +143,7 @@ function isProModeLabel(value: string): boolean {
 }
 
 function proModeLabel(node: Element): string | null {
-  const values = [text(node), node.getAttribute('aria-label') ?? '', node.getAttribute('title') ?? ''];
+  const values = [controlText(node), node.getAttribute('aria-label') ?? '', node.getAttribute('title') ?? ''];
   for (const value of values) {
     const normalized = value.replace(/\s+/g, ' ').trim();
     if (!normalized || normalized.length > 96) continue;
@@ -118,7 +158,7 @@ function proModeLabel(node: Element): string | null {
 
 function eligibleModelControl(node: Element): boolean {
   if (!node.matches('button, [role="button"]') || node.closest(
-    '[data-message-author-role], [data-message-id], article, [data-testid^="conversation-turn"], nav, aside, [role="menu"], [role="menuitem"], [data-testid*="attachment" i], [data-testid*="file" i], [hidden], [aria-hidden="true"]'
+    '[data-message-author-role], [data-message-id], [data-turn-key], [data-chatgpt-search-unit-key], article, [data-testid^="conversation-turn"], nav, aside, [role="menu"], [role="menuitem"], [data-testid*="attachment" i], [data-testid*="file" i], [hidden], [aria-hidden="true"]'
   )) return false;
   // document.visibilityState is intentionally not used: a background tab is valid.
   for (let parent: Element | null = node; parent; parent = parent.parentElement) {
@@ -145,13 +185,14 @@ function mode(): { label: string | null; fingerprint: string | null; detail: str
 export function readSnapshot(documentId: string): PageSnapshot {
   const all = messages();
   const last = all.at(-1) ?? null;
-  const userMessages = all.filter((n) => n.getAttribute('data-message-author-role') === 'user');
-  const assistantMessages = all.filter((n) => n.getAttribute('data-message-author-role') === 'assistant');
+  const userMessages = all.filter(n => messageRole(n) === 'user');
+  const assistantMessages = all.filter(n => messageRole(n) === 'assistant');
   const lastUser = userMessages.at(-1) ?? null;
   const lastAssistant = assistantMessages.at(-1) ?? null;
   let lastAssistantId = lastAssistant ? messageId(lastAssistant) : null;
-  const answerText = text(lastAssistant);
-  const answerRawText = rawText(lastAssistant);
+  const answerBody = lastAssistant?.querySelector('[data-markdown-text-style="assistant-message"]') ?? lastAssistant;
+  const answerText = text(answerBody);
+  const answerRawText = rawText(answerBody);
   const editor = findComposerEditor();
   const generation = generationEvidence(lastUser, lastAssistant, editor);
   const busySignal = generation.busy;
@@ -160,8 +201,10 @@ export function readSnapshot(documentId: string): PageSnapshot {
     /error|错误|try again|重试/i.test(text(document.querySelector('[role="alert"], [data-testid*="error" i]')));
   // This is only a candidate until DOM_OBSERVATIONS records the live page's completion marker.
   const explicitComplete = Boolean(lastAssistant?.getAttribute('data-is-streaming') === 'false' || lastAssistant?.getAttribute('data-complete') === 'true');
-  const assistantTurn = lastAssistant?.closest('article, [data-testid^="conversation-turn"], [data-testid*="conversation-turn"]') ?? lastAssistant;
-  const actionEvidence = Boolean(assistantTurn?.querySelector(
+  const assistantTurn = lastAssistant?.closest('article, [data-testid^="conversation-turn"], [data-testid*="conversation-turn"], [data-turn-key]') ?? lastAssistant;
+  const newActions = assistantTurn?.querySelector('.turn-action-controls');
+  const actionEvidence = lastAssistant?.matches(NEW_MESSAGE) ? Boolean(newActions && !newActions.closest(NEW_MESSAGE) &&
+    newActions.querySelector('button[aria-label="复制"], button[aria-label="Copy"]') && newActions.querySelector('button[aria-label="重新生成回复"], button[aria-label="Regenerate response"]')) : Boolean(assistantTurn?.querySelector(
     '[data-testid*="copy" i], button[aria-label*="Copy" i], button[aria-label*="复制"], button[title*="Copy" i], button[title*="复制"], [data-testid*="regenerate" i], button[aria-label*="重新生成"]'
   ));
   const finalSignal = Boolean(!failureId && last === lastAssistant && lastAssistantId && answerText && !busySignal && (explicitComplete || actionEvidence));
@@ -174,7 +217,7 @@ export function readSnapshot(documentId: string): PageSnapshot {
     branchNode?.getAttribute('data-branch-id') || conversationKeyFromUrl();
   const editorValue = composerValue(editor);
   const hasPendingAttachment = Boolean(document.querySelector('[data-testid*="attachment" i], [aria-label*="attachment" i], [aria-label*="附件"]'));
-  const lastRole = last?.getAttribute('data-message-author-role');
+  const lastRole = messageRole(last);
   return {
     conversationKey: conversationKeyFromUrl(), url: location.href, documentId,
     activityFingerprint: activityFingerprint(lastUser),

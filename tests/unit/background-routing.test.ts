@@ -58,6 +58,35 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('background observation ownership', () => {
+  it('reconciles a versioned Pro label to generic Pro only on manual resume without resetting the budget', async () => {
+    const saved=await loadState();
+    saved.task!.state='PAUSED';
+    saved.task!.pauseReason='PAGE_RECOVERY_FAILED';
+    saved.task!.modeFingerprint='6 pro';
+    await saveState(saved);
+    currentPage=snapshot({documentId:'new-layout',modeFingerprint:'pro'});
+    const {control}=await import('../../src/background/coordinator');
+    await control('RESUME');
+    const task=(await loadState()).task!;
+    expect(task.modeFingerprint).toBe('pro');
+    expect(task.boundDocumentId).toBe('new-layout');
+    expect(task.confirmedSends).toBe(saved.task!.confirmedSends);
+    expect(task.deadlineAt).toBe(saved.task!.deadlineAt);
+    expect(sends()).toHaveLength(0);
+  });
+  it('does not reconcile two different explicit Pro model versions on resume', async () => {
+    const saved=await loadState();
+    saved.task!.state='PAUSED';
+    saved.task!.pauseReason='MODE_CHANGED';
+    saved.task!.modeFingerprint='6 pro';
+    await saveState(saved);
+    currentPage=snapshot({modeFingerprint:'7 pro'});
+    const {control}=await import('../../src/background/coordinator');
+    await control('RESUME');
+    expect((await loadState()).task?.modeFingerprint).toBe('6 pro');
+    expect((await loadState()).task?.pauseReason).toBe('MODE_CHANGED');
+    expect(sends()).toHaveLength(0);
+  });
   it('resumes a recovered document with explicit thinking failure, sends once and preserves the budget', async () => {
     const saved = await loadState();
     saved.task!.state = 'PAUSED';

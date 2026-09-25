@@ -39,6 +39,10 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.15: support the alternate composer and conversation layout
+
+Model parsing excludes hidden measurement text, so a visible Pro button with an aria-hidden sizing label remains Pro. The alternate composer selector, message-ID attributes, paired user/assistant turns, labelled thinking-failure heading, action strip and process progress are now supported alongside the previous layout. Ambiguous message IDs cannot confirm completion. Manual Resume can reconcile generic Pro and versioned Pro labels on the same conversation/branch without resetting budget or deadline; two different explicit model versions remain blocked. Consumed thinking failures remain deduplicated by user turn across layout changes.
+
 ### v0.2.14: continue after an explicit thinking failure
 
 The current assistant turn's visible “无法思考” heading is recognized as a failed attempt, not a completed answer. With an idle composer, verified Pro mode and stable turn identity, the extension sends the configured follow-up through its normal guarded send path. Each accepted follow-up counts against the original budget; the same failed turn is consumed once and ambiguous sends are never retried. After three consecutive failure follow-ups without a normal answer, the run pauses for review. Hidden, historical, quoted and nested tool labels do not authorize a send. A page-recovery pause still requires Resume after the page is readable; missing model evidence is never replaced with a cached model. Model diagnostics now include raw/excluded composer-control counts.

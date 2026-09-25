@@ -38,6 +38,7 @@ export function canDispatch(task: TaskRecord, snapshot: PageSnapshot, now: numbe
     since: task.stableSince
   }, now, stableMs);
   if (!stable.complete) return { ok: false, reason: 'COMPLETION_UNKNOWN' };
-  if (task.consumedTurnIds.includes(snapshot.lastAssistantAnswerId!)) return { ok: false, reason: 'ANSWER_NOT_COMPLETE' };
+  if (task.consumedTurnIds.includes(snapshot.lastAssistantAnswerId!) || (snapshot.thinkingFailure &&
+    task.consumedTurnIds.some(id => id.startsWith(`thinking-failure:${snapshot.lastUserTurnId}:`)))) return { ok: false, reason: 'ANSWER_NOT_COMPLETE' };
   return { ok: true };
 }
