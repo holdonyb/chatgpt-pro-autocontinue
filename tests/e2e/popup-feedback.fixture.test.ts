@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { createTask } from '../../src/core/reducer';
+import type { PageSnapshot } from '../../src/shared/types';
 
 let startAllowed = false;
 beforeEach(async () => {
@@ -51,4 +53,63 @@ it('shows saved run settings instead of unrelated default inputs', async () => {
   expect((document.getElementById('maxSends') as HTMLInputElement).value).toBe('30');
   expect((document.getElementById('hours') as HTMLInputElement).value).toBe('2');
   expect((document.getElementById('prompt') as HTMLInputElement).disabled).toBe(true);
+});
+
+function missingTurnStatus() {
+  const task = createTask({ conversationKey: 'c1', branchFingerprint: 'c1', tabId: 7, documentId: 'd1', modeFingerprint: 'pro', prompt: '继续', maxSends: 20, hours: 8, now: Date.now() - 60_000 });
+  task.confirmedSends = 7;
+  task.consumedTurnIds = ['a0', 'a1'];
+  task.lastCompletedTurnId = 'u2';
+  const page: PageSnapshot = {
+    conversationKey: 'c1', branchFingerprint: 'c1', documentId: 'd1', url: 'https://chatgpt.com/c/c1', modeFingerprint: 'pro', modeLabel: 'Pro', status: 'READY',
+    lastMessageRole: 'assistant', lastUserTurnId: 'u1', lastAssistantAnswerId: 'a1', answerFingerprint: 'a1:complete',
+    finalSignal: true, busySignal: false, errorSignal: false, editorEmpty: true, hasPendingAttachment: false, observedAt: Date.now()
+  };
+  return { task, page };
+}
+
+it('explains the history mismatch, requests only one explicit continuation and keeps the saved budget', async () => {
+  const { task, page } = missingTurnStatus();
+  let complete: (value: unknown) => void = () => undefined;
+  const send = vi.mocked(chrome.runtime.sendMessage);
+  send.mockImplementation(async (message: any) => {
+    if (message.type === 'GET_STATUS') return { state: task, logs: [] };
+    if (message.type === 'GET_PAGE_INFO') return { snapshot: page };
+    return new Promise(resolve => { complete = resolve; });
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(document.getElementById('reason')!.textContent).toContain('当前回答已完成');
+  expect(document.getElementById('reason')!.textContent).toContain('上次续发的消息未在页面显示');
+  expect(document.getElementById('missingTurnRecovery')!.hidden).toBe(false);
+  expect(document.getElementById('status')!.textContent).toContain('7/20');
+  document.getElementById('continueCurrent')!.click();
+  document.getElementById('continueCurrent')!.click();
+  await vi.advanceTimersByTimeAsync(1_000);
+  const requests = send.mock.calls.filter(call => (call[0] as any).type === 'CONTINUE_CURRENT');
+  expect(requests).toHaveLength(1);
+  expect(requests[0][0]).toEqual({ type: 'CONTINUE_CURRENT', runId: task.runId, revision: task.revision, answerId: 'a1', userTurnId: 'u1', documentId: 'd1' });
+  expect((document.getElementById('continueCurrent') as HTMLButtonElement).disabled).toBe(true);
+  task.manualContinuation = { answerId: 'a1', userTurnId: 'u1', documentId: 'd1' };
+  complete({ ok: true });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(document.getElementById('missingTurnRecovery')!.hidden).toBe(true);
+  expect(document.getElementById('reason')!.textContent).toContain('正在核对页面稳定性');
+  expect(document.getElementById('status')!.textContent).toContain('7/20');
+});
+
+it.each(['draft', 'busy', 'error', 'foreign-document', 'foreign-conversation', 'reload', 'uncertain', 'stopped', 'expired', 'limit'])('hides the explicit recovery action for %s', async kind => {
+  const { task, page } = missingTurnStatus();
+  if (kind === 'draft') page.editorEmpty = false;
+  if (kind === 'busy') page.busySignal = true;
+  if (kind === 'error') page.errorSignal = true;
+  if (kind === 'foreign-document') page.documentId = 'other';
+  if (kind === 'foreign-conversation') page.conversationKey = 'other';
+  if (kind === 'reload') task.controlledReloadAt = Date.now();
+  if (kind === 'uncertain') { task.state = 'PAUSED'; task.pauseReason = 'SEND_UNCERTAIN'; }
+  if (kind === 'stopped') task.state = 'STOPPED';
+  if (kind === 'expired') task.deadlineAt = Date.now() - 1;
+  if (kind === 'limit') task.maxSends = task.confirmedSends;
+  vi.mocked(chrome.runtime.sendMessage).mockImplementation(async (message: any) => message.type === 'GET_STATUS' ? { state: task, logs: [] } : { snapshot: page });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(document.getElementById('missingTurnRecovery')!.hidden).toBe(true);
 });

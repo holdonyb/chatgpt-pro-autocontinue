@@ -1,5 +1,5 @@
-import type { ControlRequest, PageInfoRequest, PageObservationRequest, StartRequest } from '../shared/types';
-import { control, onObservation, serialized, start, checkAlarm, STABILITY_ALARM_PREFIX } from './coordinator';
+import type { ContinueCurrentRequest, ControlRequest, PageInfoRequest, PageObservationRequest, StartRequest } from '../shared/types';
+import { continueFromCurrentAnswer, control, onObservation, serialized, start, checkAlarm, STABILITY_ALARM_PREFIX } from './coordinator';
 import { loadState } from './store';
 import { conversationKeyFromUrl } from '../shared/conversation';
 import { withTimeout } from '../shared/timeout';
@@ -30,7 +30,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }).catch(reportBackgroundFailure);
 });
 
-chrome.runtime.onMessage.addListener((message: StartRequest | ControlRequest | PageInfoRequest | PageObservationRequest, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: StartRequest | ControlRequest | PageInfoRequest | PageObservationRequest | ContinueCurrentRequest, sender, sendResponse) => {
   const replyError = (error: unknown) => sendResponse({ ok: false, error: String(error) });
   // Read-only popup requests must not queue behind a suspended renderer command.
   if (message.type === 'GET_STATUS') {
@@ -47,6 +47,10 @@ chrome.runtime.onMessage.addListener((message: StartRequest | ControlRequest | P
     return true;
   }
   void serialized(async () => {
+    if (message.type === 'CONTINUE_CURRENT') {
+      if (sender.tab || sender.url !== chrome.runtime.getURL('popup.html')) return { ok: false, error: '请从扩展弹窗操作。' };
+      return continueFromCurrentAnswer(message);
+    }
     if (message.type === 'START') return start(sender.tab?.id ?? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id ?? -1, message);
     if (message.type === 'PAGE_OBSERVATION') {
       await onObservation(message, { tabId: sender.tab?.id, frameId: sender.frameId });

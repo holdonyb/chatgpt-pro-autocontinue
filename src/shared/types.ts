@@ -14,6 +14,7 @@ export type PauseReason =
   | 'CONVERSATION_CHANGED'
   | 'BRANCH_CHANGED'
   | 'ANSWER_NOT_COMPLETE'
+  | 'SUBMITTED_TURN_MISSING'
   | 'COMPLETION_UNKNOWN'
   | 'USER_DRAFT'
   | 'USER_INTERVENTION'
@@ -73,6 +74,7 @@ export interface PendingAttempt {
 }
 
 export interface TaskRecord {
+  manualContinuation?: { answerId: string; userTurnId: string; documentId: string } | null;
   consecutiveThinkingFailures?: number;
   lastActivityFingerprint?: string | null;
   lastBusySignal?: boolean;
@@ -115,6 +117,7 @@ export interface PersistedState {
 
 export interface StartRequest { type: 'START'; prompt: string; maxSends: number; hours: number; staleRefreshMinutes?: number; }
 export interface ControlRequest { type: 'PAUSE' | 'RESUME' | 'STOP' | 'GET_STATUS'; }
+export interface ContinueCurrentRequest { type: 'CONTINUE_CURRENT'; runId: string; revision: number; answerId: string; userTurnId: string; documentId: string; }
 export interface PageInfoRequest { type: 'GET_PAGE_INFO'; }
 export interface PageObservationRequest { type: 'PAGE_OBSERVATION'; snapshot: PageSnapshot; source?: string; }
 export interface ClickEvidence { target: 'send'; testId: string; type: string; at: number; }

@@ -40,7 +40,7 @@ beforeEach(async () => {
       get: vi.fn(async () => structuredClone(storage)),
       set: vi.fn(async (data: Record<string, unknown>) => { storage = { ...storage, ...structuredClone(data) }; })
     } },
-    runtime: { onStartup: event(), onInstalled: event(), onMessage: { addListener: (fn: typeof messageListener) => { messageListener = fn; } } },
+    runtime: { getURL: (path: string) => `chrome-extension://test/${path}`, onStartup: event(), onInstalled: event(), onMessage: { addListener: (fn: typeof messageListener) => { messageListener = fn; } } },
     alarms: { create: vi.fn(), onAlarm: event() },
     tabs: { sendMessage, onRemoved: event(), onUpdated: { addListener: (fn: typeof updateListener) => { updateListener = fn; } } }
   });
@@ -58,6 +58,121 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('background observation ownership', () => {
+  async function replayAcceptedThenRolledBack() {
+    await observe(); // a2 -> accepted u3
+    await observe(snapshot({status:'ERROR',errorSignal:true,finalSignal:false,lastMessageRole:'user',lastUserTurnId:'u3'}));
+    expect((await loadState()).task?.pauseReason).toBe('ERROR_ON_PAGE');
+    currentPage=snapshot({documentId:'d2'}); // Refresh loses u3 and shows a2/u2 again.
+    const {control,checkAlarm}=await import('../../src/background/coordinator');
+    await control('RESUME');
+    await vi.advanceTimersByTimeAsync(16000); await checkAlarm();
+    return (await loadState()).task!;
+  }
+
+  it('replays accepted send, site error and history rollback without resending or pretending the answer is unfinished', async()=>{
+    const task=await replayAcceptedThenRolledBack();
+    expect(task.confirmedSends).toBe(3);
+    expect(task.lastCompletedTurnId).toBe('u3');
+    expect(sends()).toHaveLength(1);
+    expect((await loadState()).logs.at(-1)?.detail).toContain('reason=SUBMITTED_TURN_MISSING');
+    expect((await loadState()).logs.at(-1)?.detail).toContain('expectedUser=u3 observedUser=u2');
+  });
+
+  it('refreshes missing submitted turns with the same bounded recovery budget and never clicks send automatically', async()=>{
+    await replayAcceptedThenRolledBack();
+    chrome.tabs.reload=vi.fn(async()=>undefined);
+    const {checkAlarm}=await import('../../src/background/coordinator');
+    for(let n=1;n<=3;n++) {
+      await vi.advanceTimersByTimeAsync(900001); await checkAlarm();
+      expect(chrome.tabs.reload).toHaveBeenCalledTimes(n);
+      currentPage=snapshot({documentId:`recovered-${n}`});
+      await observe(currentPage); await vi.advanceTimersByTimeAsync(11000); await checkAlarm();
+    }
+    expect((await loadState()).task).toMatchObject({state:'PAUSED',pauseReason:'SUBMITTED_TURN_MISSING',confirmedSends:3});
+    expect(sends()).toHaveLength(1);
+  });
+
+  function currentRequest(task: Awaited<ReturnType<typeof replayAcceptedThenRolledBack>>) {
+    return {type:'CONTINUE_CURRENT' as const,runId:task.runId,revision:task.revision,answerId:'a2',userTurnId:'u2',documentId:'d2'};
+  }
+  it('accepts explicit continuation only from the extension popup', async () => {
+    const task = await replayAcceptedThenRolledBack();
+    const request = currentRequest(task);
+    for (const sender of [
+      { url: 'https://chatgpt.com/c/c1', tab: { id: 7 } },
+      { url: 'chrome-extension://test/popup.html', tab: { id: 7 } },
+      { url: 'chrome-extension://other/popup.html' },
+      {}
+    ]) {
+      const result = await new Promise(resolve => messageListener(request, sender as chrome.runtime.MessageSender, resolve));
+      expect(result).toMatchObject({ ok: false });
+      expect((await loadState()).task?.manualContinuation).toBeFalsy();
+    }
+    const result = await new Promise(resolve => messageListener(request, { url: chrome.runtime.getURL('popup.html') }, resolve));
+    expect(result).toEqual({ ok: true });
+    expect((await loadState()).task?.manualContinuation).toMatchObject({ answerId: 'a2', userTurnId: 'u2', documentId: 'd2' });
+    expect(sends()).toHaveLength(1);
+  });
+
+  it('automatically resumes normal continuation if the missing message and its new completed answer reappear', async () => {
+    const task = await replayAcceptedThenRolledBack();
+    currentPage = snapshot({ documentId: 'd2', lastUserTurnId: 'u3', lastAssistantAnswerId: 'a3', answerFingerprint: 'a3:complete' });
+    await observe(currentPage);
+    expect(sends()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(11_000);
+    const { checkAlarm } = await import('../../src/background/coordinator');
+    await checkAlarm();
+    expect(sends()).toHaveLength(2);
+    expect((await loadState()).task?.confirmedSends).toBe(task.confirmedSends + 1);
+    expect((await loadState()).task?.consumedTurnIds).toEqual([...task.consumedTurnIds, 'a3']);
+  });
+  it('permits one explicitly requested continuation, retains the ledger and rejects a duplicate UI request', async()=>{
+    const task=await replayAcceptedThenRolledBack();
+    const {continueFromCurrentAnswer,checkAlarm}=await import('../../src/background/coordinator');
+    const request=currentRequest(task);
+    expect(await continueFromCurrentAnswer(request)).toEqual({ok:true});
+    expect((await loadState()).task?.consumedTurnIds).toEqual(task.consumedTurnIds);
+    expect((await loadState()).task?.deadlineAt).toBe(task.deadlineAt);
+    expect((await loadState()).task?.confirmedSends).toBe(task.confirmedSends);
+    expect((await continueFromCurrentAnswer(request)).ok).toBe(false);
+    await checkAlarm(); expect(sends()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(11000); await checkAlarm();
+    expect(sends()).toHaveLength(2);
+    expect((await loadState()).task).toMatchObject({confirmedSends:4,manualContinuation:null});
+    await vi.advanceTimersByTimeAsync(16000); await checkAlarm();
+    expect(sends()).toHaveLength(2);
+  });
+  it.each(['draft','busy','error','changed-answer','changed-mode','changed-document','pending','deadline','limit','old-revision'])('rejects manual recovery after %s', async(kind)=>{
+    const task=await replayAcceptedThenRolledBack();
+    const request=currentRequest(task);
+    if(kind==='draft') currentPage.editorEmpty=false;
+    if(kind==='busy') currentPage.busySignal=true;
+    if(kind==='error') currentPage.errorSignal=true;
+    if(kind==='changed-answer') currentPage.lastAssistantAnswerId='other';
+    if(kind==='changed-mode') currentPage.modeFingerprint='other';
+    if(kind==='changed-document') currentPage.documentId='other';
+    const state=await loadState();
+    if(kind==='pending') state.task!.pendingAttempt={attemptId:'x',sourceAnswerId:'a2',expectedParentTurnId:'a2',previousUserTurnId:'u2',promptDigest:'x',phase:'DISPATCH_COMMITTED',createdAt:Date.now(),confirmedUserMessageId:null};
+    if(kind==='deadline') state.task!.deadlineAt=Date.now()-1;
+    if(kind==='limit') state.task!.maxSends=state.task!.confirmedSends;
+    if(kind==='old-revision') request.revision--;
+    await saveState(state);
+    const {continueFromCurrentAnswer}=await import('../../src/background/coordinator');
+    expect((await continueFromCurrentAnswer(request)).ok).toBe(false);
+    expect(sends()).toHaveLength(1);
+    expect((await loadState()).task?.manualContinuation).toBeFalsy();
+  });
+  it('cancels one-use authorization when the page becomes busy before dispatch',async()=>{
+    const task=await replayAcceptedThenRolledBack();
+    const {continueFromCurrentAnswer,checkAlarm}=await import('../../src/background/coordinator');
+    await continueFromCurrentAnswer(currentRequest(task));
+    currentPage=snapshot({documentId:'d2',busySignal:true,status:'BUSY',finalSignal:false});
+    await observe(currentPage);
+    currentPage=snapshot({documentId:'d2'});
+    await vi.advanceTimersByTimeAsync(16000); await checkAlarm();
+    expect((await loadState()).task?.manualContinuation).toBeNull();
+    expect(sends()).toHaveLength(1);
+  });
   it('reconciles a versioned Pro label to generic Pro only on manual resume without resetting the budget', async () => {
     const saved=await loadState();
     saved.task!.state='PAUSED';

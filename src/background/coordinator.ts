@@ -1,5 +1,5 @@
-import type { ContentCommand, PageObservationRequest, PageSnapshot, PauseReason, StartRequest, TaskRecord } from '../shared/types';
-import { canDispatch, shouldRefreshStaleBusy } from '../core/guards';
+import type { ContentCommand, ContinueCurrentRequest, PageObservationRequest, PageSnapshot, PauseReason, StartRequest, TaskRecord } from '../shared/types';
+import { canDispatch, isSubmittedTurnMissing, shouldRefreshStaleBusy } from '../core/guards';
 import { hasIndependentCompletionEvidence, isStableContinuation } from '../core/completion';
 import { createTask, reduceTask } from '../core/reducer';
 import { addLog, loadState, saveState } from './store';
@@ -152,6 +152,32 @@ async function dispatch(task: TaskRecord, snapshot: PageSnapshot): Promise<void>
   } catch (error) { await control('PAUSE', 'SEND_UNCERTAIN', error instanceof Error ? error.message : String(error)); }
 }
 
+// Explicit, one-use authorization from the popup. Never infer this from Resume,
+// a missing message, a page error, or a timer. Keep the send ledger and budget.
+export async function continueFromCurrentAnswer(request: ContinueCurrentRequest): Promise<{ ok: boolean; error?: string }> {
+  const state = await loadState();
+  const task = state.task;
+  if (!task || task.runId !== request.runId || task.revision !== request.revision || task.pendingAttempt ||
+      !(task.state === 'WAITING_ANSWER' || (task.state === 'PAUSED' && task.pauseReason === 'SUBMITTED_TURN_MISSING'))) {
+    return { ok: false, error: '任务状态已变化，请重新打开弹窗核对。' };
+  }
+  if (Date.now() >= task.deadlineAt || task.confirmedSends >= task.maxSends) return { ok: false, error: '已达到原任务的时限或发送上限。' };
+  const page = await observeTab(task.boundTabId);
+  if (!page || page.documentId !== request.documentId || page.lastAssistantAnswerId !== request.answerId ||
+      page.lastUserTurnId !== request.userTurnId || !isSubmittedTurnMissing(task, page) || !page.editorEmpty || page.hasPendingAttachment ||
+      task.controlledReloadAt != null || task.identityWaitSince != null || Date.now() < task.nextEligibleAt) {
+    return { ok: false, error: '页面已变化或尚不可发送，未再次续发。请核对原对话。' };
+  }
+  const now = Date.now();
+  const resumed = reduceTask(task, { type: 'RESUME', now });
+  const authorized = { ...resumed, lastAnswerFingerprint: page.answerFingerprint, stableSince: now,
+    manualContinuation: { answerId: request.answerId, userTurnId: request.userTurnId, documentId: request.documentId } };
+  await saveState(addLog({ ...state, task: authorized }, 'MANUAL_CURRENT_CONTINUATION', authorized, now,
+    `source=${short(request.answerId)} missingUser=${short(task.lastCompletedTurnId)} countsPreserved=true`));
+  await chrome.alarms.create(`${STABILITY_ALARM_PREFIX}${task.runId}`, { when: now + 10_500 });
+  return { ok: true };
+}
+
 // Transport identity is supplied by Chrome, never trusted from the page payload.
 export interface ObservationSender { tabId: number | undefined; frameId: number | undefined; }
 
@@ -261,7 +287,10 @@ export async function onObservation(message: PageObservationRequest, sender: Obs
     task = reduceTask(task, { type: 'PAUSE', reason: guard.reason, detail, now: Date.now() });
     await saveState(addLog({ ...state, task }, 'PAUSE_GUARD', task));
   }
-  else await saveState(addLog(state, 'GUARD_BLOCKED', task, Date.now(), `reason=${guard.reason}`));
+  else if (guard.reason === 'SUBMITTED_TURN_MISSING' && (task.recoveryReloads ?? 0) >= 3 && task.recoveryTurnId === message.snapshot.lastUserTurnId) {
+    await control('PAUSE', 'SUBMITTED_TURN_MISSING', '已刷新核对 3 次，上次续发的消息仍未在页面显示。无法确定它是否仍在服务端执行，请核对后选择是否从当前回答再次续发；原次数和时限保留。');
+  }
+  else await saveState(addLog(state, 'GUARD_BLOCKED', task, Date.now(), `reason=${guard.reason}${guard.reason === 'SUBMITTED_TURN_MISSING' ? ` expectedUser=${short(task.lastCompletedTurnId)} observedUser=${short(message.snapshot.lastUserTurnId)} consumedAnswer=${short(message.snapshot.lastAssistantAnswerId)}` : ''}`));
 }
 
 export async function checkAlarm(source = 'periodic'): Promise<void> {
@@ -324,7 +353,7 @@ export async function checkAlarm(source = 'periodic'): Promise<void> {
       return;
     }
     const reloading = { ...reduceTask(refreshed.task, { type: 'CONTROLLED_RELOAD_STARTED', now }), recoveryTurnId: reloadPage.lastUserTurnId, recoveryReloads: reloads + 1 };
-    refreshed = addLog({ ...refreshed, task: reloading }, 'STALE_BUSY_RELOAD', reloading, now, `cause=${reloadPage.busySignal ? 'busy-no-progress' : 'awaiting-submitted-answer'} action=tabs.reload busy=${reloadPage.busySignal} idleMs=${now - (refreshed.task.lastProgressAt ?? now)} thresholdMs=${refreshed.task.staleRefreshMs ?? 15 * 60_000}`);
+    refreshed = addLog({ ...refreshed, task: reloading }, 'STALE_BUSY_RELOAD', reloading, now, `cause=${isSubmittedTurnMissing(refreshed.task,reloadPage) ? 'submitted-turn-missing' : reloadPage.busySignal ? 'busy-no-progress' : 'awaiting-submitted-answer'} action=tabs.reload busy=${reloadPage.busySignal} idleMs=${now - (refreshed.task.lastProgressAt ?? now)} thresholdMs=${refreshed.task.staleRefreshMs ?? 15 * 60_000}`);
     await saveState(refreshed);
     try { await withTimeout(chrome.tabs.reload(reloading.boundTabId), 5_000, '刷新请求超时，请检查原标签页后继续'); }
     catch (error) { await control('PAUSE', 'TAB_UNAVAILABLE', error instanceof Error ? error.message : String(error)); }

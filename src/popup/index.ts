@@ -1,5 +1,6 @@
 import { pauseReasonLabel, stateLabel } from '../core/reducer';
-import type { PersistedState, TaskRecord } from '../shared/types';
+import { isSubmittedTurnMissing } from '../core/guards';
+import type { ContinueCurrentRequest, PersistedState, TaskRecord } from '../shared/types';
 import { withTimeout } from '../shared/timeout';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -10,6 +11,8 @@ const staleRefreshMinutes = $('staleRefreshMinutes') as HTMLInputElement;
 let latestLogText = '暂无日志';
 let refreshing = false;
 let displayedRun: string | null = null;
+let continuationRequest: ContinueCurrentRequest | null = null;
+let continuingCurrent = false;
 
 function send(message: unknown): Promise<any> { return chrome.runtime.sendMessage(message); }
 
@@ -17,7 +20,11 @@ async function refresh(): Promise<void> {
   if (refreshing) return;
   refreshing = true;
   try { await refreshOnce(); }
-  catch { $('mode').textContent = '暂时无法读取扩展状态，请稍后重新打开弹窗。'; }
+  catch {
+    continuationRequest = null;
+    $('missingTurnRecovery').hidden = true;
+    $('mode').textContent = '暂时无法读取扩展状态，请稍后重新打开弹窗。';
+  }
   finally { refreshing = false; }
 }
 
@@ -50,16 +57,47 @@ async function refreshOnce(): Promise<void> {
   if (task) $('target').textContent = `已绑定对话 ${task.conversationKey.slice(0, 8)}…`;
   const page = await withTimeout(send({ type: 'GET_PAGE_INFO' }), 6_000, '页面暂未回应').catch(() => null);
   const pageSnapshot = page?.snapshot;
+  // Update the action after both reads, without collapsing it during each poll.
+  // The background independently verifies the request against fresh state.
+  continuationRequest = null;
+  $('missingTurnRecovery').hidden = true;
   $('target').textContent = task ? `已绑定对话 ${task.conversationKey.slice(0, 8)}…` : pageSnapshot?.conversationKey ? `当前对话 ${pageSnapshot.conversationKey.slice(0, 8)}…` : '请在目标对话页面打开此弹窗';
   $('mode').textContent = pageSnapshot?.modeLabel ? `已识别模式：${pageSnapshot.modeLabel}` : '模式未知（无法安全启动）';
+  const submittedMissing = Boolean(task && pageSnapshot && isSubmittedTurnMissing(task, pageSnapshot));
+  if (task && submittedMissing && !task.pendingAttempt && !task.manualContinuation && task.controlledReloadAt == null && task.identityWaitSince == null &&
+      pageSnapshot.editorEmpty && !pageSnapshot.hasPendingAttachment && Date.now() >= task.nextEligibleAt &&
+      Date.now() < task.deadlineAt && task.confirmedSends < task.maxSends &&
+      (task.state === 'WAITING_ANSWER' || (task.state === 'PAUSED' && task.pauseReason === 'SUBMITTED_TURN_MISSING'))) {
+    continuationRequest = { type: 'CONTINUE_CURRENT', runId: task.runId, revision: task.revision,
+      answerId: pageSnapshot.lastAssistantAnswerId, userTurnId: pageSnapshot.lastUserTurnId, documentId: pageSnapshot.documentId };
+    $('missingTurnRecovery').hidden = false;
+    $('continueCurrent').toggleAttribute('disabled', continuingCurrent);
+  }
   if (task?.state === 'WAITING_ANSWER' && pageSnapshot?.conversationKey === task.conversationKey) {
     const currentAnswer = pageSnapshot.lastMessageRole === 'assistant' && pageSnapshot.finalSignal && !task.consumedTurnIds?.includes(pageSnapshot.lastAssistantAnswerId);
     const refreshMinutes = (task.staleRefreshMs ?? 15 * 60_000) / 60_000;
     $('reason').textContent = pageSnapshot.busySignal ? `ChatGPT 显示生成中；过程或答案持续 ${refreshMinutes} 分钟无新进展时，会自动刷新核对。` : pageSnapshot.thinkingFailure ? '本轮显示“无法思考”；确认页面稳定后将发送续研指令，计入发送次数。' : currentAnswer ? '回答已完成，等待约 10–30 秒进行稳定确认。' : `尚未确认本轮回答完成；持续 ${refreshMinutes} 分钟无新进展时，会自动刷新核对。`;
+    if (submittedMissing) $('reason').textContent = task.manualContinuation ? '已确认从当前回答再续发一次，正在核对页面稳定性。' : `当前回答已完成，也已针对它续发过；但上次续发的消息未在页面显示。持续 ${refreshMinutes} 分钟无进展时会刷新核对。`;
   }
   if (task?.state === 'WAITING_ANSWER' && task.controlledReloadAt != null) $('reason').textContent = '正在刷新并重新确认目标页面，发送计数保持不变。';
   else if (task?.state === 'WAITING_ANSWER' && task.failedPageChecks) $('reason').textContent = `目标页面暂未回应，正在重试检查（${task.failedPageChecks}/3）。`;
 }
+
+$('continueCurrent').addEventListener('click', async () => {
+  if (!continuationRequest || continuingCurrent) return;
+  const request = continuationRequest;
+  continuingCurrent = true;
+  $('continueCurrent').toggleAttribute('disabled', true);
+  const error = $('actionError');
+  error.hidden = true;
+  try {
+    const result = await withTimeout(send(request), 12_000, '操作尚未确认，请重新打开弹窗核对状态。');
+    if (!result?.ok) throw new Error(result?.error ?? '尚未恢复，请核对任务状态。');
+  } catch (cause) {
+    error.textContent = cause instanceof Error ? cause.message : '操作未确认，请核对任务状态。';
+    error.hidden = false;
+  } finally { continuingCurrent = false; await refresh(); }
+});
 
 // Action feedback is separate from the polled task state so refresh cannot erase it.
 $('start').addEventListener('click', async () => {

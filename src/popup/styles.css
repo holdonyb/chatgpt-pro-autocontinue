@@ -18,3 +18,5 @@ details { margin-top: 12px; font-size: 11px; }
 summary { cursor: pointer; color: #4b5563; }
 pre { max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: 8px; border-radius: 6px; background: #f3f4f6; font: 10px/1.4 ui-monospace, Consolas, monospace; }
 #copyLogs { width: 100%; }
+#missingTurnRecovery { margin-top: 12px; border-top: 1px solid #d1d5db; font-size: 12px; line-height: 1.5; }
+#continueCurrent { width: 100%; }

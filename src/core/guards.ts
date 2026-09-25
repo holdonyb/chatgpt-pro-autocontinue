@@ -1,12 +1,27 @@
 import type { PageSnapshot, PauseReason, TaskRecord } from '../shared/types';
-import { hasContinuationEvidence, isStableContinuation } from './completion';
+import { hasContinuationEvidence, hasIndependentCompletionEvidence, isStableContinuation } from './completion';
 
 export type DispatchGuardResult = { ok: true } | { ok: false; reason: PauseReason };
 
+// The page is showing the very answer we already continued from, but the
+// accepted user message is absent. This proves a view mismatch, not non-delivery.
+export function isSubmittedTurnMissing(task: TaskRecord, page: PageSnapshot): boolean {
+  return Boolean(task.confirmedSends > 0 && task.lastCompletedTurnId && !task.lastCompletedTurnId.startsWith('accepted:') &&
+    page.conversationKey === task.conversationKey && page.branchFingerprint === task.branchFingerprint &&
+    page.documentId === task.boundDocumentId && page.modeFingerprint === task.modeFingerprint &&
+    page.lastUserTurnId && page.lastUserTurnId !== task.lastCompletedTurnId &&
+    page.lastAssistantAnswerId === task.consumedTurnIds.at(-1) && hasIndependentCompletionEvidence(page));
+}
+
+function hasManualContinuation(task: TaskRecord, page: PageSnapshot): boolean {
+  return Boolean(task.manualContinuation && task.manualContinuation.answerId === page.lastAssistantAnswerId &&
+    task.manualContinuation.userTurnId === page.lastUserTurnId && task.manualContinuation.documentId === page.documentId);
+}
+
 export function shouldRefreshStaleBusy(task: TaskRecord, snapshot: PageSnapshot, now: number): boolean {
   const awaitedUser = Boolean(task.lastCompletedTurnId) && (snapshot.lastUserTurnId === task.lastCompletedTurnId || task.lastCompletedTurnId!.startsWith('accepted:'));
-  const awaitingSubmittedAnswer = awaitedUser &&
-    (!hasContinuationEvidence(snapshot) || !snapshot.lastAssistantAnswerId || task.consumedTurnIds.includes(snapshot.lastAssistantAnswerId));
+  const awaitingSubmittedAnswer = isSubmittedTurnMissing(task, snapshot) || (awaitedUser &&
+    (!hasContinuationEvidence(snapshot) || !snapshot.lastAssistantAnswerId || task.consumedTurnIds.includes(snapshot.lastAssistantAnswerId)));
   return task.state === 'WAITING_ANSWER' && !task.pendingAttempt && !task.controlledReloadAt &&
     snapshot.documentId === task.boundDocumentId && snapshot.conversationKey === task.conversationKey &&
     snapshot.branchFingerprint === task.branchFingerprint && snapshot.modeFingerprint === task.modeFingerprint &&
@@ -38,6 +53,7 @@ export function canDispatch(task: TaskRecord, snapshot: PageSnapshot, now: numbe
     since: task.stableSince
   }, now, stableMs);
   if (!stable.complete) return { ok: false, reason: 'COMPLETION_UNKNOWN' };
+  if (isSubmittedTurnMissing(task, snapshot)) return hasManualContinuation(task, snapshot) ? { ok: true } : { ok: false, reason: 'SUBMITTED_TURN_MISSING' };
   if (task.consumedTurnIds.includes(snapshot.lastAssistantAnswerId!) || (snapshot.thinkingFailure &&
     task.consumedTurnIds.some(id => id.startsWith(`thinking-failure:${snapshot.lastUserTurnId}:`)))) return { ok: false, reason: 'ANSWER_NOT_COMPLETE' };
   return { ok: true };

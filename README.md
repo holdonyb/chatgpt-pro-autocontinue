@@ -39,6 +39,12 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.17: recover when a confirmed follow-up disappears from the page
+
+When a refresh shows the same completed answer already continued from, but no longer shows the accepted user turn, the popup now explains that mismatch. The extension checks again using the configured stale-refresh interval, with the existing three-refresh limit. If the new turn and answer reappear, ordinary continuation resumes. The accepted-send ledger and original count/deadline remain intact.
+
+If the message remains absent, **确认从当前回答续发一次** explicitly authorizes one new follow-up from the displayed answer. The server may still be working on the earlier message; absence in the page does not prove non-delivery. This action rechecks the bound page and a fresh stability window, preserves the budget, and cannot override a pending uncertain attempt. Ordinary Resume does not authorize this extra send. Reload the extension and refresh the original tab after updating; live background acceptance is still pending.
+
 ### v0.2.16: fix completed-answer ownership and false disconnect pauses
 
 Paired turns have separate user and assistant action bars. Completion now checks all bars, requires the assistant's copy/regenerate controls in the same visible bar after the latest answer, and excludes user, historical, hidden and in-answer controls. Diagnostic logs report total and eligible bar counts. Fresh observations from the bound page reset consecutive read-failure counts; unrelated tabs and stale samples cannot reset them. Streaming DOM changes are sampled at most once per 250 ms, while explicit reads and pre-send checks remain immediate.

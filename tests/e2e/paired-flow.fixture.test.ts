@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readSnapshot } from '../../src/content/chatgpt-adapter';
 import { executeSend } from '../../src/content/editor';
 import { loadState } from '../../src/background/store';
-import { checkAlarm, onObservation, start } from '../../src/background/coordinator';
+import { checkAlarm, continueFromCurrentAnswer, onObservation, start } from '../../src/background/coordinator';
 import type { ContentCommand } from '../../src/shared/types';
 
 // Captured from the real paired-turn DOM; all research text, URLs and IDs removed.
@@ -73,4 +73,34 @@ it('runs adapter, coordinator and guarded editor through two sends, refresh and 
   expect((await loadState()).task).toMatchObject({state:'FINISHED',pauseReason:'MAX_SENDS_REACHED',confirmedSends:2});
   await checkAlarm(); expect(clicks).toBe(2);
   expect((await loadState()).logs.filter(log=>log.event==='SEND_CLICK_REPORTED')).toHaveLength(2);
+});
+
+it('requires explicit recovery after a confirmed DOM send disappears on refresh, then clicks once through the normal editor', async () => {
+  await start(7, { type: 'START', prompt: 'Continue', maxSends: 2, hours: 8 });
+  await vi.advanceTimersByTimeAsync(11_000);
+  await checkAlarm();
+  expect(clicks).toBe(1);
+  // A reloaded page exposes the prior completed answer, with the accepted turn absent.
+  document.querySelector('[data-turn-key="pending-1"]')!.remove();
+  document.querySelector('form [data-testid="stop-button"]')!.remove();
+  doc = 'd2';
+  await vi.advanceTimersByTimeAsync(16_000);
+  await checkAlarm();
+  await vi.advanceTimersByTimeAsync(11_000);
+  await checkAlarm();
+  expect(clicks).toBe(1);
+  const task = (await loadState()).task!;
+  expect(task).toMatchObject({ confirmedSends: 1, lastCompletedTurnId: 'u-1', consumedTurnIds: ['a-0'] });
+  expect((await loadState()).logs.at(-1)?.detail).toContain('SUBMITTED_TURN_MISSING');
+  expect(await continueFromCurrentAnswer({ type: 'CONTINUE_CURRENT', runId: task.runId, revision: task.revision, documentId: doc, answerId: 'a-0', userTurnId: 'u-0' })).toEqual({ ok: true });
+  await checkAlarm(); expect(clicks).toBe(1);
+  await vi.advanceTimersByTimeAsync(11_000);
+  await checkAlarm();
+  expect(clicks).toBe(2);
+  expect((await loadState()).task).toMatchObject({ confirmedSends: 2, deadlineAt: task.deadlineAt, manualContinuation: null, consumedTurnIds: ['a-0', 'a-0'] });
+  await vi.advanceTimersByTimeAsync(16_000);
+  completeAnswer(); await checkAlarm();
+  await vi.advanceTimersByTimeAsync(11_000); await checkAlarm();
+  expect(clicks).toBe(2);
+  expect((await loadState()).task).toMatchObject({ state: 'FINISHED', pauseReason: 'MAX_SENDS_REACHED' });
 });

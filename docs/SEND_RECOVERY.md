@@ -1,5 +1,17 @@
 # Send polling and recovery
 
+## v0.2.17: accepted turn absent after refresh
+
+A field log showed completion correctly recognized, a follow-up accepted with a concrete user ID, then a page error. After manual refresh the page showed the previously consumed answer and its old user turn. Deduplication correctly prevented another automatic send, but the popup incorrectly described the answer as unfinished; stale refresh also required the now-missing user ID and could not recover this view.
+
+`SUBMITTED_TURN_MISSING` identifies this specific mismatch using the most recently consumed answer, a different visible user turn, positive completion evidence and matching bound identity/model. It does not establish whether the earlier request was persisted, executed or lost on the server. Logs contain shortened expected/observed IDs, not message text. The configured inactivity refresh now includes this condition and retains the per-turn limit of three reloads. Persistent mismatch pauses with an accurate reason; normal completion of the recovered submitted turn resumes normal processing.
+
+The popup offers **确认从当前回答续发一次** only for this condition with available budget and an empty composer. This is explicit permission for one new follow-up, not automatic retry. It is bound to run/revision/document/answer/user IDs, accepted only from the extension popup, and verified with a fresh page read. It preserves counts, deadline and consumed-answer history; a newly accepted send increments the count normally. A fresh stability window precedes sending. Observed page/identity changes, draft/attachment, generation, pause, stop or document rebind revoke permission. The permission is consumed before persisting and dispatching the attempt. Pending uncertain attempts, expired runs and reached limits cannot use it. Ordinary Resume never grants it.
+
+Tests replay the send/error/rollback sequence with synthetic IDs and include a joined actual adapter/coordinator/editor fixture, three-refresh limit, natural recovery, duplicate/stale requests, sender ownership, changed page, drafts, errors, pending uncertainty and preserved budget. These are mocked browser/DOM tests; no live research conversation was sent to, stopped or refreshed for validation.
+
+## Send polling
+
 The polling loop previously slept before checking the deadline again. If the renderer resumed after the deadline, the loop could return a timeout without reading a send button that was now present. A simulated 17-second wall-clock jump reproduces this race; it does not establish why a particular real renderer was delayed.
 
 Polling now samples on wakeup before testing the deadline. Before the single click, the sender rechecks the conversation, answer, mode, branch, busy/error/attachment signals, composer text, and connected elements. These checks can refuse a send when the page changed during the wait.
