@@ -39,6 +39,12 @@ Run settings (including your follow-up instruction), task metadata, an answer fi
 
 ## Development
 
+### v0.2.16: fix completed-answer ownership and false disconnect pauses
+
+Paired turns have separate user and assistant action bars. Completion now checks all bars, requires the assistant's copy/regenerate controls in the same visible bar after the latest answer, and excludes user, historical, hidden and in-answer controls. Diagnostic logs report total and eligible bar counts. Fresh observations from the bound page reset consecutive read-failure counts; unrelated tabs and stale samples cannot reset them. Streaming DOM changes are sampled at most once per 250 ms, while explicit reads and pre-send checks remain immediate.
+
+Validation includes a sanitized structural capture of the reported live completed turn and a joined adapter/coordinator/editor simulation of two accepted follow-ups, refresh, deduplication and the send limit. These tests do not substitute for a live installed-extension/background run. After updating, reload the extension and refresh the target tab to replace the old content script.
+
 ### v0.2.15: support the alternate composer and conversation layout
 
 Model parsing excludes hidden measurement text, so a visible Pro button with an aria-hidden sizing label remains Pro. The alternate composer selector, message-ID attributes, paired user/assistant turns, labelled thinking-failure heading, action strip and process progress are now supported alongside the previous layout. Ambiguous message IDs cannot confirm completion. Manual Resume can reconcile generic Pro and versioned Pro labels on the same conversation/branch without resetting budget or deadline; two different explicit model versions remain blocked. Consumed thinking failures remain deduplicated by user turn across layout changes.

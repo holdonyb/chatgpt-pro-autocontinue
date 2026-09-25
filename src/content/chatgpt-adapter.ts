@@ -182,6 +182,24 @@ function mode(): { label: string | null; fingerprint: string | null; detail: str
   return { label: labels[0], fingerprint: [...fingerprints][0], detail };
 }
 
+function completionActions(assistant: Element | null, turn: Element | null): { found: boolean; strips: number; eligible: number } {
+  if (!assistant?.matches(NEW_MESSAGE)) return { found: Boolean(turn?.querySelector(
+    '[data-testid*="copy" i], button[aria-label*="Copy" i], button[aria-label*="复制"], button[title*="Copy" i], button[title*="复制"], [data-testid*="regenerate" i], button[aria-label*="重新生成"]'
+  )), strips: 0, eligible: 0 };
+  // A paired turn contains both USER and ASSISTANT action strips. Associate a
+  // strip with this answer by ownership and DOM order, never by first match.
+  const strips = Array.from(turn?.querySelectorAll('.turn-action-controls') ?? []);
+  const eligible = strips.filter(strip => !strip.closest(NEW_MESSAGE) &&
+    strip.closest('[data-turn-key]') === assistant.closest('[data-turn-key]') &&
+    Boolean(assistant.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING) && isVisible(strip));
+  const found = eligible.some(strip => {
+    const labels = Array.from(strip.querySelectorAll('button'))
+      .filter(button => button.closest('.turn-action-controls') === strip && isVisible(button)).map(controlLabel);
+    return labels.some(label => /^(复制|Copy)$/.test(label)) && labels.some(label => /^(重新生成回复|Regenerate response)$/.test(label));
+  });
+  return { found, strips: strips.length, eligible: eligible.length };
+}
+
 export function readSnapshot(documentId: string): PageSnapshot {
   const all = messages();
   const last = all.at(-1) ?? null;
@@ -202,11 +220,8 @@ export function readSnapshot(documentId: string): PageSnapshot {
   // This is only a candidate until DOM_OBSERVATIONS records the live page's completion marker.
   const explicitComplete = Boolean(lastAssistant?.getAttribute('data-is-streaming') === 'false' || lastAssistant?.getAttribute('data-complete') === 'true');
   const assistantTurn = lastAssistant?.closest('article, [data-testid^="conversation-turn"], [data-testid*="conversation-turn"], [data-turn-key]') ?? lastAssistant;
-  const newActions = assistantTurn?.querySelector('.turn-action-controls');
-  const actionEvidence = lastAssistant?.matches(NEW_MESSAGE) ? Boolean(newActions && !newActions.closest(NEW_MESSAGE) &&
-    newActions.querySelector('button[aria-label="复制"], button[aria-label="Copy"]') && newActions.querySelector('button[aria-label="重新生成回复"], button[aria-label="Regenerate response"]')) : Boolean(assistantTurn?.querySelector(
-    '[data-testid*="copy" i], button[aria-label*="Copy" i], button[aria-label*="复制"], button[title*="Copy" i], button[title*="复制"], [data-testid*="regenerate" i], button[aria-label*="重新生成"]'
-  ));
+  const actions = completionActions(lastAssistant, assistantTurn);
+  const actionEvidence = actions.found;
   const finalSignal = Boolean(!failureId && last === lastAssistant && lastAssistantId && answerText && !busySignal && (explicitComplete || actionEvidence));
   if (failureId) lastAssistantId = failureId;
   const model = mode();
@@ -222,7 +237,7 @@ export function readSnapshot(documentId: string): PageSnapshot {
     conversationKey: conversationKeyFromUrl(), url: location.href, documentId,
     activityFingerprint: activityFingerprint(lastUser),
     visibility: document.visibilityState, focused: document.hasFocus(), wasDiscarded: Boolean((document as Document & { wasDiscarded?: boolean }).wasDiscarded),
-    completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0} stopControls=${generation.stopControls} streaming=${generation.streaming} thinkingFailure=${Boolean(failureId)} editor=${Boolean(editor)}`,
+    completionDetail: `chars=${answerText.length} explicit=${explicitComplete} actions=${actionEvidence} actionStrips=${actions.strips} eligibleStrips=${actions.eligible} latest=${last === lastAssistant} scope=${assistantTurn?.tagName ?? '-'} buttons=${assistantTurn?.querySelectorAll('button').length ?? 0} stopControls=${generation.stopControls} streaming=${generation.streaming} thinkingFailure=${Boolean(failureId)} editor=${Boolean(editor)}`,
     branchFingerprint, modeFingerprint: model.fingerprint, modeLabel: model.label, modeDetail: model.detail,
     status: errorSignal ? 'ERROR' : busySignal ? 'BUSY' : model.fingerprint ? 'READY' : 'UNKNOWN',
     lastMessageRole: failureId ? 'assistant' : lastRole === 'user' || lastRole === 'assistant' ? lastRole : 'unknown',

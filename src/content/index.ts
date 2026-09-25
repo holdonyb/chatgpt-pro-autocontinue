@@ -8,6 +8,7 @@ let alive = true;
 let observer: MutationObserver | null = null;
 let timer: number | null = null;
 let stabilityTimer: number | null = null;
+let mutationTimer: number | null = null;
 const onPopState = (): void => publish();
 
 function snapshot() { return readSnapshot(documentId); }
@@ -16,6 +17,7 @@ function stopStaleScript(): void {
   observer?.disconnect();
   if (timer !== null) window.clearInterval(timer);
   if (stabilityTimer !== null) window.clearTimeout(stabilityTimer);
+  if (mutationTimer !== null) window.clearTimeout(mutationTimer);
   window.removeEventListener('popstate', onPopState);
 }
 function scheduleStabilityRecheck(delayMs = 10_500): void {
@@ -71,7 +73,13 @@ chrome.runtime.onMessage.addListener((message: { type: string; command?: Content
   return false;
 });
 
-observer = new MutationObserver(() => publish());
+// Streaming can change the DOM on every token. Sample bursts at a bounded rate,
+// without continually postponing the sample while text keeps arriving. Explicit
+// GET_SNAPSHOT and pre-send checks still read immediately from the current DOM.
+observer = new MutationObserver(() => {
+  if (!alive || mutationTimer !== null) return;
+  mutationTimer = window.setTimeout(() => { mutationTimer = null; publish(); }, 250);
+});
 observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['data-is-streaming', 'data-complete', 'disabled'] });
 window.addEventListener('popstate', onPopState);
 timer = window.setInterval(publish, 2_000);

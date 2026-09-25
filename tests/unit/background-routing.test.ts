@@ -714,6 +714,27 @@ describe('bounded recovery', () => {
     expect((await loadState()).task?.state).toBe('WAITING_ANSWER');
   });
 
+  it('resets failed probes when fresh bound-page observations arrive between timeouts', async () => {
+    const {checkAlarm}=await import('../../src/background/coordinator');
+    const before=(await loadState()).task!;
+    sendMessage.mockImplementation(() => new Promise(() => undefined));
+    for(let i=0;i<4;i++) {
+      const check=checkAlarm(); await vi.advanceTimersByTimeAsync(5001); await check;
+      expect((await loadState()).task?.failedPageChecks).toBe(1);
+      await observe(snapshot({status:'BUSY',busySignal:true,finalSignal:false}));
+      expect((await loadState()).task?.failedPageChecks).toBe(0);
+      expect((await loadState()).task?.state).toBe('WAITING_ANSWER');
+    }
+    expect((await loadState()).task?.confirmedSends).toBe(before.confirmedSends);
+    expect((await loadState()).task?.deadlineAt).toBe(before.deadlineAt);
+    expect(sends()).toHaveLength(0);
+  });
+  it.each(['other-tab','old-sample'])('does not reset disconnect failures from %s observations', async kind => {
+    const state=await loadState(); state.task!.failedPageChecks=2; await saveState(state);
+    await observe(snapshot({status:'BUSY',busySignal:true,finalSignal:false,observedAt:kind==='old-sample'?Date.now()-60000:Date.now()}),kind==='other-tab'?8:7);
+    expect((await loadState()).task?.failedPageChecks).toBe(2);
+  });
+
   it('enforces the deadline without waiting for an unavailable page', async () => {
     const state = await loadState();
     state.task!.deadlineAt = Date.now() - 1;

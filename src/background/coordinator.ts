@@ -211,6 +211,14 @@ export async function onObservation(message: PageObservationRequest, sender: Obs
     await control('PAUSE', 'CONVERSATION_CHANGED', transportDetail);
     return;
   }
+  // Push observations are also successful reads. A timeout on the pull channel
+  // must not accumulate through fresh, verified observations from this page.
+  const sampleAge = now - message.snapshot.observedAt;
+  if (before.failedPageChecks && message.snapshot.documentId === before.boundDocumentId &&
+      message.snapshot.branchFingerprint === before.branchFingerprint && Number.isFinite(sampleAge) && sampleAge >= 0 && sampleAge <= 10_000) {
+    before = { ...before, failedPageChecks: 0 };
+    state = addLog({ ...state, task: before }, 'PAGE_CONNECTION_RECOVERED', before, now, 'source=bound-page-observation');
+  }
   let task = reduceTask(before, { type: 'OBSERVATION', snapshot: message.snapshot, now });
   state = addLog({ ...state, task }, 'OBSERVATION', task, now, `${transportDetail} ${snapshotDetail(message.snapshot, task, message.source, now)}`);
   await saveState(state);

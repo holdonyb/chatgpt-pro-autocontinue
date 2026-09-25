@@ -74,3 +74,46 @@ it('does not resend a consumed thinking failure when its UI layout changes', () 
   task.consumedTurnIds=['thinking-failure:u1:old-layout-failure-id'];
   expect(canDispatch(task,page,11001)).toEqual({ok:false,reason:'ANSWER_NOT_COMPLETE'});
 });
+
+function completedPair() {
+  const pair=document.querySelector('[data-turn-key]')!;
+  pair.innerHTML=`<div data-chatgpt-search-unit-key="x:user" data-chatgpt-search-message-ids="u1">Continue
+    <div class="turn-action-controls"><button aria-label="复制消息"></button><button aria-label="编辑消息"></button></div></div>
+    <div data-chatgpt-search-unit-key="x:assistant" data-chatgpt-search-message-ids="a1 a1"><div data-markdown-text-style="assistant-message">Complete</div></div>
+    <div class="turn-action-controls" id="answer-actions"><button aria-label="复制"></button><button aria-label="重新生成回复"></button></div>`;
+  return pair;
+}
+it('finds the assistant actions after the user action strip in the real paired layout', () => {
+  completedPair();
+  expect(readSnapshot('d').finalSignal).toBe(true);
+});
+it.each(['historical','before-answer','inside-answer','hidden','split-strips'])('rejects unrelated completion controls: %s',kind => {
+  const pair=completedPair();
+  const actions=document.querySelector('#answer-actions')!;
+  const assistant=pair.querySelector('[data-chatgpt-search-unit-key$=":assistant"]')!;
+  if(kind==='historical') pair.insertAdjacentElement('beforebegin',actions);
+  if(kind==='before-answer') assistant.insertAdjacentElement('beforebegin',actions);
+  if(kind==='inside-answer') assistant.append(actions);
+  if(kind==='hidden') actions.setAttribute('hidden','');
+  if(kind==='split-strips') {
+    const second=document.createElement('div'); second.className='turn-action-controls';
+    second.append(actions.lastElementChild!); pair.append(second);
+  }
+  expect(readSnapshot('d').finalSignal).toBe(false);
+});
+it('does not mistake an earlier assistant segment for a completed latest segment', () => {
+  const pair=completedPair();
+  pair.insertAdjacentHTML('beforeend','<div data-chatgpt-search-unit-key="x:4:assistant" data-chatgpt-search-message-ids="a2">Still generating</div>');
+  expect(readSnapshot('d').finalSignal).toBe(false);
+});
+it('keeps stop-control precedence over completed actions and waits for stable evidence', () => {
+  completedPair();
+  const stop=document.createElement('button'); stop.setAttribute('aria-label','停止生成'); document.querySelector('form')!.append(stop);
+  expect(readSnapshot('d').finalSignal).toBe(false);
+  stop.remove();
+  const page=readSnapshot('d');
+  let task=createTask({conversationKey:'new-layout',branchFingerprint:'new-layout',tabId:1,documentId:'d',modeFingerprint:'pro',prompt:'继续',maxSends:20,hours:8,now:0});
+  task=reduceTask(task,{type:'OBSERVATION',snapshot:page,now:1});
+  expect(canDispatch(task,page,2).ok).toBe(false);
+  expect(canDispatch(task,page,11001).ok).toBe(true);
+});
